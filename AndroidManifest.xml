@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="io.github.nisu123f.honorduobar"
+    android:versionCode="4"
+    android:versionName="1.0.3">
+
+    <uses-sdk
+        android:minSdkVersion="26"
+        android:targetSdkVersion="34" />
+
+    <application
+        android:name=".ui.App"
+        android:allowBackup="false"
+        android:description="@string/module_description"
+        android:icon="@mipmap/ic_launcher"
+        android:label="Honor Duo Bar"
+        android:theme="@android:style/Theme.DeviceDefault.Light">
+
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="Honor Duo Bar：状态栏三合一（Wi-Fi / 移动信号 / 电量合并为一个自绘字形）" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="93" />
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:label="Honor Duo Bar"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <provider
+            android:name="io.github.libxposed.service.XposedProvider"
+            android:authorities="io.github.nisu123f.honorduobar.XposedService"
+            android:exported="true" />
+    </application>
+</manifest>

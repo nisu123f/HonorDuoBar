@@ -1,0 +1,44 @@
+HonorHook
+Copyright (C) 2026 coderstory (https://github.com/coderstory/HonorHook)
+
+本项目按 **GNU Affero General Public License v3.0** 发布（全文见同目录 LICENSE）。
+
+--------------------------------------------------------------------------------
+第三方代码
+--------------------------------------------------------------------------------
+
+本项目**包含**以下第三方项目的代码（编译进分发的 APK）：
+
+  XHS_Downloader_Android
+    来源：    https://github.com/NEORUAA/XHS_Downloader_Android
+    许可：    GNU Affero General Public License v3.0（与本项目一致）
+    取用方式：git submodule（reference/xhs/XHS_Downloader_Android），
+              pin 在 commit d5c0070328f82ff5f748de5c0b826161d5eaca8b（tag 1.4.1，2026-09-27）
+    使用范围：仅 7 个文件参与编译（白名单 = 唯一事实源，见 libs/xhs-dn-core/build.gradle.kts）：
+
+        com/neoruaa/xhsdn/core/model/ResolvedNote.kt
+        com/neoruaa/xhsdn/data/storage/StorageDestination.kt
+        com/neoruaa/xhsdn/data/storage/StoredMediaRef.kt
+        com/neoruaa/xhsdn/data/xhs/XhsContentRepository.kt
+        com/neoruaa/xhsdn/data/xhs/XhsNoteParser.kt
+        com/neoruaa/xhsdn/data/xhs/XhsUrlParser.kt
+        com/neoruaa/xhsdn/domain/download/DownloadContracts.kt
+
+    修改情况：**未作任何修改**（原样引用，保留上游版权声明与许可条款）。
+              上游其余 105 个文件（含 Compose UI）不参与编译。
+
+--------------------------------------------------------------------------------
+对应源码（AGPL-3.0 §6 / §13）
+--------------------------------------------------------------------------------
+
+  本项目：  https://github.com/coderstory/HonorHook
+  上游代码：https://github.com/NEORUAA/XHS_Downloader_Android/tree/d5c0070328f82ff5f748de5c0b826161d5eaca8b
+
+本项目不提供网络服务，§13（网络交互场景下的源码提供）不适用；
+§6 要求的对应源码由上述公开仓库提供（含 submodule pin 的上游 commit）。
+
+--------------------------------------------------------------------------------
+商标
+--------------------------------------------------------------------------------
+
+荣耀 / Honor / MagicOS / YOYO 等商标属其各自权利人所有，本项目与之无隶属或背书关系。
