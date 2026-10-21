@@ -31,14 +31,14 @@
 
 | 项目 | 要求 |
 | --- | --- |
-| 系统 | Honor / MagicOS（已在 SystemUI 17.0.0.1 上验证） |
+| 系统 | Honor / MagicOS 11（MagicOS 10 自测） |
 | Android | 8.0 及以上（API 26+） |
 | 框架 | 支持 libxposed **API 102** 的 LSPosed |
 
 ### 步骤
 
 1. 安装本模块 APK。
-2. 打开 **LSPosed 管理器** → 模块 → 启用 **HonorSystemUI**。
+2. 打开 **LSPosed 管理器** → 模块 → 启用 **Honor Duo Bar**。
 3. 作用域勾选 **系统界面（`com.android.systemui`）**。
 4. 打开 App 调整开关 → 点「重启系统界面」（需要 root 授权），或手动重启手机。
 
@@ -73,7 +73,7 @@ adb shell "su -c 'killall com.android.systemui'"
 TOOLS=/path/to/tools ./build.sh
 ```
 
-构建产物：`build/HonorSystemUI-Trio-1.0.1.apk`
+构建产物：`build/HonorDuoBar-<version>.apk`（版本号每次构建自动递增）
 
 ---
 
@@ -84,7 +84,7 @@ HonorSystemUI/
 ├── AndroidManifest.xml          # 清单文件
 ├── META-INF/xposed/             # LSPosed 模块描述（module.prop / scope.list）
 ├── res/                         # 资源（strings.xml）
-├── src/io/github/voreulch/honorsystemui/
+├── src/io/github/nisu123f/honorduobar/
 │   ├── FeatureCatalog.kt        # 功能开关目录（key 的唯一事实源）
 │   ├── ui/
 │   │   ├── App.kt               # Application
