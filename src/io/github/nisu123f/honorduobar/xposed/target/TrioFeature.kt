@@ -25,7 +25,6 @@ import io.github.nisu123f.honorduobar.xposed.core.MountEngine
 import io.github.nisu123f.honorduobar.xposed.core.MountSession
 import io.github.nisu123f.honorduobar.xposed.data.RemoteConfig
 import java.lang.ref.WeakReference
-import kotlin.math.abs
 import kotlin.math.min
 
 /**
@@ -215,7 +214,6 @@ object TrioFeature {
             showDots = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_DOTS),
             showPercent = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_PERCENT),
             showType = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_TYPE),
-            accent = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_ACCENT),
             levelColor = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_LEVEL_COLOR),
             antiBurnIn = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_ANTI_BURNIN),
         )
@@ -273,7 +271,6 @@ object TrioFeature {
         val showDots: Boolean,
         val showPercent: Boolean,
         val showType: Boolean,
-        val accent: Boolean,
         val levelColor: Boolean,
         val antiBurnIn: Boolean,
     )
@@ -322,15 +319,45 @@ object TrioFeature {
             override fun run() {
                 val cell = BURN_IN_CELLS[burnInIndex % BURN_IN_CELLS.size]
                 burnInIndex++
-                translationX = cell.first * burnInStepPx
-                translationY = cell.second * burnInStepPx
+                applyBurnInCell(cell.first, cell.second)
                 handler.postDelayed(this, BURN_IN_INTERVAL_MS)
             }
         }
 
+        /**
+         * 按父容器可用空间钳制位移。
+         *
+         * 父容器默认裁剪子视图，而字形排在状态栏最右侧、上下也几乎顶满行高；直接 ±1dp
+         * 会让绘制区域越界被切掉（显示不全）。这里把位移限制在父容器内边界以内，
+         * 贴着边缘时该方向不再移动，其余方向仍保留微移。
+         */
+        private fun applyBurnInCell(cellX: Int, cellY: Int) {
+            var dx = cellX * burnInStepPx
+            var dy = cellY * burnInStepPx
+            val p = parent as? View
+            if (p != null && width > 0 && height > 0) {
+                dx = clampToParent(dx, left, right, p.width, p.paddingLeft, p.paddingRight)
+                dy = clampToParent(dy, top, bottom, p.height, p.paddingTop, p.paddingBottom)
+            }
+            translationX = dx
+            translationY = dy
+        }
+
+        private fun clampToParent(
+            delta: Float,
+            start: Int,
+            end: Int,
+            parentSize: Int,
+            paddingStart: Int,
+            paddingEnd: Int,
+        ): Float {
+            val min = (paddingStart - start).toFloat()
+            val max = (parentSize - paddingEnd - end).toFloat()
+            return if (min > max) 0f else delta.coerceIn(min, max)
+        }
+
         private var level = -1
         private var charging = false
-        private var fastCharging = false
         private var fullCharging = false
         private var wifiLevel = -1
         private var mobileLevels = IntArray(0)
@@ -358,7 +385,7 @@ object TrioFeature {
             super.onDetachedFromWindow()
         }
 
-        private data class PowerState(val level: Int, val charging: Boolean, val fast: Boolean, val full: Boolean)
+        private data class PowerState(val level: Int, val charging: Boolean, val full: Boolean)
 
         private fun readPowerState(battery: BatteryManager?): PowerState {
             val capacity = runCatching {
@@ -386,19 +413,13 @@ object TrioFeature {
                 runCatching { battery?.isCharging == true }.getOrDefault(false)
             // 充满判据：status=FULL 为准；个别机型 FULL 回报滞后，用 charging && 100% 兜底。
             val full = status == BatteryManager.BATTERY_STATUS_FULL || (charging && level >= 100)
-            val current = abs(
-                runCatching {
-                    battery?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW) ?: 0
-                }.getOrDefault(0),
-            )
-            return PowerState(level, charging, charging && !full && current >= 1_500_000, full)
+            return PowerState(level, charging, full)
         }
 
         private fun refresh() {
             val power = readPowerState(context.getSystemService(BatteryManager::class.java))
             level = power.level
             charging = power.charging
-            fastCharging = power.fast
             fullCharging = power.full
 
             val wifi = context.getSystemService(android.net.wifi.WifiManager::class.java)
@@ -473,10 +494,9 @@ object TrioFeature {
                 ringArc(canvas, RING_START, RING_SWEEP)
             }
             if (level <= 0) {
-                // 电量取不到时仍要表达充电状态：画满可见弧（绿/琥珀）。
+                // 电量取不到时仍要表达充电状态：画满可见弧（绿）。
                 if (charging) {
-                    ringPaint.color = if (config.accent && fastCharging) COLOR_AMBER
-                    else if (config.accent) COLOR_CHARGING else fg
+                    ringPaint.color = COLOR_CHARGING
                     if (twoArcs) {
                         ringArc(canvas, RING_START, ARC_LEFT_SWEEP)
                         ringArc(canvas, ARC_RIGHT_START, ARC_RIGHT_SWEEP)
@@ -486,10 +506,9 @@ object TrioFeature {
                 }
                 return
             }
-            // 充电态由彩色强调接管（绿/琥珀）；否则按电量分级变色（对齐原生行为：≤10% 红、11–20% 橙）。
+            // 充电态统一绿色（不区分快充）；否则按电量分级变色（对齐原生行为：≤10% 红、11–20% 橙）。
             ringPaint.color = when {
-                config.accent && fastCharging -> COLOR_AMBER
-                config.accent && charging -> COLOR_CHARGING
+                charging -> COLOR_CHARGING
                 config.levelColor && level <= 10 -> COLOR_DANGER
                 config.levelColor && level <= 20 -> COLOR_LOW
                 else -> fg
@@ -557,7 +576,7 @@ object TrioFeature {
 
         private fun drawCentre(canvas: Canvas, fg: Int) {
             if (charging) {
-                fillPaint.color = if (config.accent && fastCharging) COLOR_AMBER else fg
+                fillPaint.color = COLOR_CHARGING
                 if (fullCharging) {
                     // 充满：闪电换成「～」（对齐原生充满图标的波浪语义）。
                     textPaint.color = fillPaint.color
@@ -653,7 +672,6 @@ object TrioFeature {
             const val W_SCALE = 0.92f
             const val COLOR_DANGER = 0xFFFF3B30.toInt()
             const val COLOR_LOW = 0xFFF2B900.toInt()
-            const val COLOR_AMBER = 0xFFFFB300.toInt()
             const val COLOR_CHARGING = 0xFF34C759.toInt()
             /** 防烧屏微移周期与网格（±1 格 × burnInStepPx）。 */
             const val BURN_IN_INTERVAL_MS = 30_000L

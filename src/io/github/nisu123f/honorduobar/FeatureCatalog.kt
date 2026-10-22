@@ -15,7 +15,6 @@ object FeatureCatalog {
     const val KEY_SYSTEMUI_TRIO_DOTS = "systemui.trio_dots"
     const val KEY_SYSTEMUI_TRIO_PERCENT = "systemui.trio_percent"
     const val KEY_SYSTEMUI_TRIO_TYPE = "systemui.trio_type"
-    const val KEY_SYSTEMUI_TRIO_ACCENT = "systemui.trio_accent"
     /** 三合一电量环按百分比变色（≤10% 红、11–20% 橙）。 */
     const val KEY_SYSTEMUI_TRIO_LEVEL_COLOR = "systemui.trio_level_color"
     /** 三合一防烧屏（周期性微移字形）。 */
@@ -85,16 +84,9 @@ object FeatureCatalog {
             dependsOn = KEY_SYSTEMUI_TRIO,
         ),
         Feature(
-            KEY_SYSTEMUI_TRIO_ACCENT,
-            "三合一：彩色强调",
-            "充电绿色、快充琥珀；关闭后充电态也跟随状态栏反色。",
-            defaultEnabled = true,
-            dependsOn = KEY_SYSTEMUI_TRIO,
-        ),
-        Feature(
             KEY_SYSTEMUI_TRIO_LEVEL_COLOR,
             "三合一：按电量变色",
-            "电量环与环心数字随百分比变色：≤10% 红、11–20% 橙、>20% 跟随反色（与原生电池图标行为一致）；充电时由彩色强调接管。",
+            "电量环与环心数字随百分比变色：≤10% 红、11–20% 橙、>20% 跟随反色（与原生电池图标行为一致）；充电时统一显示绿色。",
             defaultEnabled = true,
             dependsOn = KEY_SYSTEMUI_TRIO,
         ),
