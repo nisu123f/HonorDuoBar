@@ -21,6 +21,9 @@ object FeatureCatalog {
     /** 三合一图标尺寸（dp，18–26）。 */
     const val KEY_SYSTEMUI_TRIO_SIZE = "systemui.trio_size"
 
+    /** 隐藏状态栏时钟（与三合一独立，可单用）。 */
+    const val KEY_SYSTEMUI_HIDE_CLOCK = "systemui.hide_clock"
+
     /** 宿主包名（本模块唯一作用域）。 */
     const val HOST_PACKAGE = "com.android.systemui"
 
@@ -92,6 +95,12 @@ object FeatureCatalog {
             "每 30 秒把字形沿 3×3 网格微移 ±1dp，避免 OLED 长时间点亮同一组像素；肉眼几乎不可察觉。",
             defaultEnabled = false,
             dependsOn = KEY_SYSTEMUI_TRIO,
+        ),
+        Feature(
+            KEY_SYSTEMUI_HIDE_CLOCK,
+            "隐藏状态栏时间",
+            "把状态栏左侧的时钟 TextView 设为 GONE；与三合一独立，可单独开启。",
+            defaultEnabled = false,
         ),
     )
 
