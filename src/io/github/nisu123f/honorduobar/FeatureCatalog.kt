@@ -19,6 +19,8 @@ object FeatureCatalog {
     const val KEY_SYSTEMUI_TRIO_LEVEL_COLOR = "systemui.trio_level_color"
     /** 三合一防烧屏（周期性微移字形）。 */
     const val KEY_SYSTEMUI_TRIO_ANTI_BURNIN = "systemui.trio_anti_burnin"
+    /** 灵动胶囊展开时保留蓝牙等状态图标（不让原生按胶囊边界把图标淡出）。 */
+    const val KEY_SYSTEMUI_TRIO_KEEP_ICONS = "systemui.trio_keep_icons"
     /** 三合一图标尺寸（dp，18–26）。 */
     const val KEY_SYSTEMUI_TRIO_SIZE = "systemui.trio_size"
 
@@ -95,6 +97,13 @@ object FeatureCatalog {
             "三合一：防烧屏微移",
             "每 30 秒把字形沿 3×3 网格微移 ±1dp，避免 OLED 长时间点亮同一组像素；肉眼几乎不可察觉。",
             defaultEnabled = false,
+            dependsOn = KEY_SYSTEMUI_TRIO,
+        ),
+        Feature(
+            KEY_SYSTEMUI_TRIO_KEEP_ICONS,
+            "三合一：胶囊展开时保留图标",
+            "灵动胶囊展开时，原生会按胶囊边界把蓝牙等状态图标淡出；三合一已腾出空间，开启后保持这些图标可见。",
+            defaultEnabled = true,
             dependsOn = KEY_SYSTEMUI_TRIO,
         ),
         Feature(

@@ -44,6 +44,7 @@ import kotlin.math.min
  * 挂载点（本 APK 反编译实证）：
  * - HwSystemIcons.onFinishInflate()：注入时机；
  * - HwSystemIcons.onMeasure(int,int)：前置把原生件压回 GONE（防闪根修，见 assertHidden）；
+ * - HwSystemIcons.updateIconsAlpha()：胶囊显隐后把状态/网络图标 alpha 拉回可见（防蓝牙被挤掉）；
  * - SignalClusterView.onDarkChanged(Rect,float,int)：跟随状态栏反色（第三参即 tint 色）。
  */
 object TrioFeature {
@@ -55,6 +56,7 @@ object TrioFeature {
     private const val METHOD_DARK_CHANGED = "onDarkChanged"
     private const val METHOD_LAYOUT = "onLayout"
     private const val METHOD_MEASURE = "onMeasure"
+    private const val METHOD_UPDATE_ICONS_ALPHA = "updateIconsAlpha"
 
     private const val TAG_VIEW = "hh_trio_view"
     /** 三合一开启时要隐藏的原生件：整组 + 组内单件兜底（id 不存在会自动跳过）。 */
@@ -66,11 +68,14 @@ object TrioFeature {
         "mobile_signal",
         "mobile_type",
     )
+    /** 胶囊避让会改 alpha 的容器 id 名（statusIcons / network_area_icons）。 */
+    private val ALPHA_GROUP_NAMES = arrayOf("statusIcons", "network_area_icons")
     private const val JUDGE_PREFIX = "SystemUiHook·U9"
     private const val ID_INFLATE = "systemui:trio.systemIcons.onFinishInflate"
     private const val ID_TINT = "systemui:trio.signalCluster.onDarkChanged"
     private const val ID_LAYOUT = "systemui:trio.systemIcons.onLayout"
     private const val ID_MEASURE = "systemui:trio.systemIcons.onMeasure"
+    private const val ID_UPDATE_ALPHA = "systemui:trio.systemIcons.updateIconsAlpha"
 
     /** 状态栏 tint 色（onDarkChanged 第三参），0 = 尚未收到。 */
     @Volatile private var tintColor = 0
@@ -114,6 +119,14 @@ object TrioFeature {
                 description = "U9 三合一隐藏复位（HwSystemIcons.onLayout 后重申原生信号组/电池 GONE）",
             ),
             MountEngine.SimpleTask(
+                className = CLS_SYSTEM_ICONS,
+                methodName = METHOD_UPDATE_ICONS_ALPHA,
+                paramCount = 0,
+                returnType = "void",
+                id = ID_UPDATE_ALPHA,
+                description = "U9 三合一胶囊避让（HwSystemIcons.updateIconsAlpha 后恢复状态图标 alpha，胶囊不再挤掉蓝牙等图标）",
+            ),
+            MountEngine.SimpleTask(
                 className = CLS_SIGNAL_CLUSTER,
                 methodName = METHOD_DARK_CHANGED,
                 paramCount = 3,
@@ -153,6 +166,14 @@ object TrioFeature {
                     runCatching { assertHidden(host) }
                 }
             }
+            ID_UPDATE_ALPHA -> {
+                // 原生在这里按胶囊边界把越界的状态/网络图标 alpha 置 0（蓝牙通常是最左那个）。
+                // 三合一已经腾出信号与电量空间，这里把原生 alpha 结果再拉回可见。
+                chain.proceed()
+                (chain.thisObject as? ViewGroup)?.let { host ->
+                    runCatching { restoreIconAlpha(host) }
+                }
+            }
             else -> {
                 chain.proceed()
                 val tint = runCatching { chain.getArg(2) as? Int }.getOrNull()
@@ -167,6 +188,29 @@ object TrioFeature {
 
     /** id 解析缓存：onMeasure 是高频回调，getIdentifier 字符串查表不能每次都跑。 */
     @Volatile private var hiddenIdCache: IntArray? = null
+
+    /** 胶囊避让会动 alpha 的两组容器（statusIcons 放蓝牙等状态图标，network_area_icons 放网络图标）。 */
+    @Volatile private var alphaGroupIds: IntArray? = null
+
+    /** 原生按胶囊边界把越界图标 alpha 置 0，这里把它们拉回可见（仅在三合一生效时）。 */
+    private fun restoreIconAlpha(host: ViewGroup) {
+        if (!RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_KEEP_ICONS)) return
+        if (host.findViewWithTag<View>(TAG_VIEW) == null) return
+        val ids = alphaGroupIds ?: run {
+            val res = host.context.resources
+            val pkg = host.context.packageName
+            ALPHA_GROUP_NAMES.mapNotNull { name ->
+                res.getIdentifier(name, "id", pkg).takeIf { it != 0 }
+            }.toIntArray().also { alphaGroupIds = it }
+        }
+        for (id in ids) {
+            val group = host.findViewById<ViewGroup>(id) ?: continue
+            for (i in 0 until group.childCount) {
+                val child = group.getChildAt(i) ?: continue
+                if (child.visibility == View.VISIBLE && child.alpha != 1f) child.alpha = 1f
+            }
+        }
+    }
 
     /** 宿主偶尔会把电池/信号重新显示（电量/信号更新、AOD/胶囊切换），测量/布局时重申一次隐藏。 */
     private fun assertHidden(host: ViewGroup) {
