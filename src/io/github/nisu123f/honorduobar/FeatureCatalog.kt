@@ -27,6 +27,9 @@ object FeatureCatalog {
     /** 隐藏状态栏时钟（与三合一独立，可单用）。 */
     const val KEY_SYSTEMUI_HIDE_CLOCK = "systemui.hide_clock"
 
+    /** 隐藏控制中心关机按钮（右上角电源图标）。 */
+    const val KEY_SYSTEMUI_HIDE_CC_POWER = "systemui.hide_cc_power"
+
     /** 宿主包名（本模块唯一作用域）。 */
     const val HOST_PACKAGE = "com.android.systemui"
 
@@ -110,6 +113,12 @@ object FeatureCatalog {
             KEY_SYSTEMUI_HIDE_CLOCK,
             "隐藏状态栏时间",
             "把状态栏左侧的时钟 TextView 设为 GONE；与三合一独立，可单独开启。",
+            defaultEnabled = false,
+        ),
+        Feature(
+            KEY_SYSTEMUI_HIDE_CC_POWER,
+            "隐藏控制中心关机按钮",
+            "把控制中心（状态栏右侧下滑面板）右上角的电源按钮设为 GONE；关机仍可通过长按电源键触发。",
             defaultEnabled = false,
         ),
     )

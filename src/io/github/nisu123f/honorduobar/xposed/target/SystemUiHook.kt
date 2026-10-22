@@ -15,5 +15,6 @@ object SystemUiHook : TargetHook {
     override fun install(module: XposedModule, param: XposedModuleInterface.PackageLoadedParam) {
         TrioFeature.install(module, param)
         ClockFeature.install(module, param)
+        ControlCenterFeature.install(module, param)
     }
 }
