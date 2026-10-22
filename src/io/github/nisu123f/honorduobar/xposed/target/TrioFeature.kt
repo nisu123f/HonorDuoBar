@@ -216,6 +216,7 @@ object TrioFeature {
             showPercent = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_PERCENT),
             showType = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_TYPE),
             accent = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_ACCENT),
+            levelColor = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_LEVEL_COLOR),
             antiBurnIn = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_ANTI_BURNIN),
         )
         val sizeDp = FeatureCatalog.resolveTrioSize(
@@ -273,6 +274,7 @@ object TrioFeature {
         val showPercent: Boolean,
         val showType: Boolean,
         val accent: Boolean,
+        val levelColor: Boolean,
         val antiBurnIn: Boolean,
     )
 
@@ -329,6 +331,7 @@ object TrioFeature {
         private var level = -1
         private var charging = false
         private var fastCharging = false
+        private var fullCharging = false
         private var wifiLevel = -1
         private var mobileLevels = IntArray(0)
         private var netType = ""
@@ -355,7 +358,7 @@ object TrioFeature {
             super.onDetachedFromWindow()
         }
 
-        private data class PowerState(val level: Int, val charging: Boolean, val fast: Boolean)
+        private data class PowerState(val level: Int, val charging: Boolean, val fast: Boolean, val full: Boolean)
 
         private fun readPowerState(battery: BatteryManager?): PowerState {
             val capacity = runCatching {
@@ -381,12 +384,14 @@ object TrioFeature {
                 status == BatteryManager.BATTERY_STATUS_FULL ||
                 plugged != 0 ||
                 runCatching { battery?.isCharging == true }.getOrDefault(false)
+            // 充满判据：status=FULL 为准；个别机型 FULL 回报滞后，用 charging && 100% 兜底。
+            val full = status == BatteryManager.BATTERY_STATUS_FULL || (charging && level >= 100)
             val current = abs(
                 runCatching {
                     battery?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW) ?: 0
                 }.getOrDefault(0),
             )
-            return PowerState(level, charging, charging && current >= 1_500_000)
+            return PowerState(level, charging, charging && !full && current >= 1_500_000, full)
         }
 
         private fun refresh() {
@@ -394,6 +399,7 @@ object TrioFeature {
             level = power.level
             charging = power.charging
             fastCharging = power.fast
+            fullCharging = power.full
 
             val wifi = context.getSystemService(android.net.wifi.WifiManager::class.java)
             val info = runCatching { wifi?.connectionInfo }.getOrNull()
@@ -480,11 +486,12 @@ object TrioFeature {
                 }
                 return
             }
+            // 充电态由彩色强调接管（绿/琥珀）；否则按电量分级变色（对齐原生行为：≤10% 红、11–20% 橙）。
             ringPaint.color = when {
                 config.accent && fastCharging -> COLOR_AMBER
                 config.accent && charging -> COLOR_CHARGING
-                config.accent && level <= 15 -> COLOR_DANGER
-                config.accent && level <= 20 -> COLOR_LOW
+                config.levelColor && level <= 10 -> COLOR_DANGER
+                config.levelColor && level <= 20 -> COLOR_LOW
                 else -> fg
             }
             // 进度只在「可见弧段」上均分：两段弧合计 0.65×总扫角，顶部/底部缺口不占进度。
@@ -551,11 +558,23 @@ object TrioFeature {
         private fun drawCentre(canvas: Canvas, fg: Int) {
             if (charging) {
                 fillPaint.color = if (config.accent && fastCharging) COLOR_AMBER else fg
-                canvas.drawPath(bolt, fillPaint)
+                if (fullCharging) {
+                    // 充满：闪电换成「～」（对齐原生充满图标的波浪语义）。
+                    textPaint.color = fillPaint.color
+                    textPaint.textSize = 44f
+                    textPaint.typeface = Typeface.create("sans-serif", Typeface.BOLD)
+                    drawTextCentred(canvas, "~", 60f, 66f)
+                } else {
+                    canvas.drawPath(bolt, fillPaint)
+                }
                 return
             }
             if (!config.showPercent || level < 0) return
-            textPaint.color = if (config.accent && level <= 15) COLOR_DANGER else fg
+            textPaint.color = when {
+                config.levelColor && level <= 10 -> COLOR_DANGER
+                config.levelColor && level <= 20 -> COLOR_LOW
+                else -> fg
+            }
             // 环内可视区域（内径 44.5）横向只有 88 单位，48 号粗体「100」约占 80，刚好留边；
             // 字高 34，上沿约 y=51，与上移后的 Wi-Fi 点（底 40）不打架。
             textPaint.textSize = 48f
