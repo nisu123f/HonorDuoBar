@@ -24,8 +24,14 @@ object FeatureCatalog {
     /** 三合一图标尺寸（dp，18–26）。 */
     const val KEY_SYSTEMUI_TRIO_SIZE = "systemui.trio_size"
 
-    /** 隐藏状态栏时钟（与三合一独立，可单用）。 */
+    /**
+     * 旧版「隐藏状态栏时钟」布尔键（v1.0.8 及以前）。
+     * 保留仅用于迁移：远端/本地只有此键时，true 折算为 clock_mode=1（隐藏）。
+     */
     const val KEY_SYSTEMUI_HIDE_CLOCK = "systemui.hide_clock"
+
+    /** 状态栏时钟模式（int）：0=不修改，1=隐藏，2=显秒。 */
+    const val KEY_SYSTEMUI_CLOCK_MODE = "systemui.clock_mode"
 
     /** 隐藏控制中心关机按钮（右上角电源图标）。 */
     const val KEY_SYSTEMUI_HIDE_CC_POWER = "systemui.hide_cc_power"
@@ -110,12 +116,6 @@ object FeatureCatalog {
             dependsOn = KEY_SYSTEMUI_TRIO,
         ),
         Feature(
-            KEY_SYSTEMUI_HIDE_CLOCK,
-            "隐藏状态栏时间",
-            "把状态栏左侧的时钟 TextView 设为 GONE；与三合一独立，可单独开启。",
-            defaultEnabled = false,
-        ),
-        Feature(
             KEY_SYSTEMUI_HIDE_CC_POWER,
             "隐藏控制中心关机按钮",
             "把控制中心（状态栏右侧下滑面板）右上角的电源按钮设为 GONE；关机仍可通过长按电源键触发。",
@@ -129,6 +129,9 @@ object FeatureCatalog {
 
     /** 三合一尺寸默认值（dp，可直接在 18–26 之间调节）。 */
     fun defaultTrioSize(): Int = 20
+
+    /** 时钟模式默认值：不修改。 */
+    fun defaultClockMode(): Int = 0
 
     /** 尺寸值归一：0/1/2 是旧的三档索引，新值直接就是 dp。 */
     fun resolveTrioSize(raw: Int): Int = when (raw) {

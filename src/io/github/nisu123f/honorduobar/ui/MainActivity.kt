@@ -34,6 +34,7 @@ class MainActivity : Activity() {
     private lateinit var statusText: TextView
     private lateinit var sizeValue: TextView
     private lateinit var sizeRow: LinearLayout
+    private lateinit var clockValue: TextView
     private val switches = HashMap<String, Switch>()
     private val listeners = ArrayList<() -> Unit>()
 
@@ -65,7 +66,7 @@ class MainActivity : Activity() {
 
         root.addView(buildStatusCard())
         root.addView(sectionTitle("状态栏"))
-        root.addView(buildCard(featureRows() + buildSizeRow()))
+        root.addView(buildCard(featureRows() + buildClockRow() + buildSizeRow()))
         root.addView(buildTipCard())
         root.addView(buildRestartButton())
 
@@ -190,6 +191,64 @@ class MainActivity : Activity() {
             row.addView(toggle)
             row
         }
+
+    private fun buildClockRow(): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, dp(12))
+            setOnClickListener { showClockModeDialog() }
+        }
+        val texts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        texts.addView(TextView(this).apply {
+            text = "状态栏时间"
+            setTextColor(colorText)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        })
+        texts.addView(TextView(this).apply {
+            text = "不修改：保持系统默认；隐藏：时钟整个不显示；显秒：时间精确到秒（与三合一独立）。"
+            setTextColor(colorSub)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setPadding(0, dp(3), dp(12), 0)
+            setLineSpacing(dp(2).toFloat(), 1f)
+        })
+        row.addView(texts)
+        clockValue = TextView(this).apply {
+            setTextColor(colorAccent)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        }
+        row.addView(clockValue)
+        updateClockText()
+        return row
+    }
+
+    private fun clockModeLabel(mode: Int): String = when (mode) {
+        1 -> "隐藏"
+        2 -> "显秒"
+        else -> "不修改"
+    }
+
+    private fun updateClockText() {
+        clockValue.text = "${clockModeLabel(FeatureStore.clockMode())} ›"
+    }
+
+    private fun showClockModeDialog() {
+        val labels = arrayOf("不修改", "隐藏", "显秒")
+        val current = FeatureStore.clockMode().coerceIn(0, labels.size - 1)
+        AlertDialog.Builder(this)
+            .setTitle("状态栏时间")
+            .setSingleChoiceItems(labels, current) { dialog, which ->
+                val pushed = FeatureStore.setClockMode(which)
+                updateClockText()
+                if (!pushed) toast("已保存到本地，但 LSPosed 未连接，本次改动不会下发")
+                dialog.dismiss()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
 
     private fun buildSizeRow(): View {
         sizeRow = LinearLayout(this).apply {
@@ -340,6 +399,7 @@ class MainActivity : Activity() {
         FeatureCatalog.features.forEach { feature ->
             switches[feature.key]?.isChecked = FeatureStore.isEnabled(feature.key)
         }
+        if (this::clockValue.isInitialized) updateClockText()
         renderDependency()
     }
 
