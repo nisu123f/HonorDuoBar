@@ -16,18 +16,13 @@ BUILD="$BASE/build"
 KS="$BASE/ks.jks"
 KS_PASS="honorduobar"
 
-# 每次打包自动递增版本号：versionCode +1、versionName 补丁位 +1
+# 版本号不在打包时自动递增——只有用户明确要求提交 GitHub 时才手动改 AndroidManifest.xml。
 MANIFEST="$BASE/AndroidManifest.xml"
 VC="$(grep -oP 'android:versionCode="\K[0-9]+' "$MANIFEST" | head -1)"
 VN="$(grep -oP 'android:versionName="\K[0-9.]+' "$MANIFEST" | head -1)"
 [ -n "$VC" ] && [ -n "$VN" ] || { echo "ERROR: 无法从 AndroidManifest.xml 解析版本号"; exit 1; }
-NEW_VC=$((VC + 1))
-IFS='.' read -r VN_MAJOR VN_MINOR VN_PATCH <<< "$VN"
-NEW_VN="${VN_MAJOR:-1}.${VN_MINOR:-0}.$(( ${VN_PATCH:-0} + 1 ))"
-sed -i "s/android:versionCode=\"$VC\"/android:versionCode=\"$NEW_VC\"/" "$MANIFEST"
-sed -i "s/android:versionName=\"$VN\"/android:versionName=\"$NEW_VN\"/" "$MANIFEST"
-APK_NAME="HonorDuoBar-$NEW_VN.apk"
-echo "版本: $VN($VC) -> $NEW_VN($NEW_VC)"
+APK_NAME="HonorDuoBar-$VN.apk"
+echo "版本: $VN($VC)"
 
 rm -rf "$BUILD"
 mkdir -p "$BUILD/classes" "$BUILD/dex"
