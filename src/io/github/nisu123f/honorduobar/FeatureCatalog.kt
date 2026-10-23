@@ -11,10 +11,6 @@ object FeatureCatalog {
     const val REMOTE_GROUP = "honorduobar_config"
 
     const val KEY_SYSTEMUI_TRIO = "systemui.trio"
-    const val KEY_SYSTEMUI_TRIO_WIFI = "systemui.trio_wifi"
-    const val KEY_SYSTEMUI_TRIO_DOTS = "systemui.trio_dots"
-    const val KEY_SYSTEMUI_TRIO_PERCENT = "systemui.trio_percent"
-    const val KEY_SYSTEMUI_TRIO_TYPE = "systemui.trio_type"
     /** 三合一电量环按百分比变色（≤10% 红、11–20% 橙）。 */
     const val KEY_SYSTEMUI_TRIO_LEVEL_COLOR = "systemui.trio_level_color"
     /** 三合一防烧屏（周期性微移字形）。 */
@@ -35,6 +31,12 @@ object FeatureCatalog {
 
     /** 隐藏控制中心关机按钮（右上角电源图标）。 */
     const val KEY_SYSTEMUI_HIDE_CC_POWER = "systemui.hide_cc_power"
+
+    /** 通知中心顶部日期行追加农历（「·九月初四」后缀）。 */
+    const val KEY_SYSTEMUI_SHADE_LUNAR = "systemui.shade_lunar"
+
+    /** 隐藏通知中心大时间右侧的铃铛按钮（通知管理入口）。 */
+    const val KEY_SYSTEMUI_HIDE_NOTIF_BELL = "systemui.hide_notif_bell"
 
     /** 宿主包名（本模块唯一作用域）。 */
     const val HOST_PACKAGE = "com.android.systemui"
@@ -67,34 +69,6 @@ object FeatureCatalog {
             defaultEnabled = true,
         ),
         Feature(
-            KEY_SYSTEMUI_TRIO_WIFI,
-            "三合一：显示 Wi-Fi 弧",
-            "环内上部绘制 Wi-Fi 弧线，弧数跟随真实信号强度；关闭后该位置留空。",
-            defaultEnabled = true,
-            dependsOn = KEY_SYSTEMUI_TRIO,
-        ),
-        Feature(
-            KEY_SYSTEMUI_TRIO_DOTS,
-            "三合一：显示移动信号点",
-            "环内底部绘制 4 个信号点（单卡，取默认数据卡）；关闭后不画信号点。",
-            defaultEnabled = true,
-            dependsOn = KEY_SYSTEMUI_TRIO,
-        ),
-        Feature(
-            KEY_SYSTEMUI_TRIO_PERCENT,
-            "三合一：显示电量数字",
-            "环心显示电量百分比；充电时显示闪电、充满时显示～，此开关不影响充电字形。",
-            defaultEnabled = true,
-            dependsOn = KEY_SYSTEMUI_TRIO,
-        ),
-        Feature(
-            KEY_SYSTEMUI_TRIO_TYPE,
-            "三合一：无 Wi-Fi 时显示 5G/4G",
-            "没有 Wi-Fi 时环内上部改显示当前网络制式文本。",
-            defaultEnabled = true,
-            dependsOn = KEY_SYSTEMUI_TRIO,
-        ),
-        Feature(
             KEY_SYSTEMUI_TRIO_LEVEL_COLOR,
             "三合一：按电量变色",
             "电量环与环心数字随百分比变色：≤10% 红、11–20% 橙、>20% 跟随反色（与原生电池图标行为一致）；充电时统一显示绿色。",
@@ -114,6 +88,19 @@ object FeatureCatalog {
             "灵动胶囊展开时，原生会按胶囊边界把蓝牙等状态图标淡出；三合一已腾出空间，开启后保持这些图标可见。",
             defaultEnabled = true,
             dependsOn = KEY_SYSTEMUI_TRIO,
+        ),
+        Feature(
+            KEY_SYSTEMUI_HIDE_NOTIF_BELL,
+            "隐藏通知中心铃铛按钮",
+            "隐藏通知中心大时间右侧的铃铛图标（通知管理入口，仍可从系统设置进入）；隐藏后日期行可获得更多显示宽度。",
+            defaultEnabled = false,
+        ),
+        Feature(
+            KEY_SYSTEMUI_SHADE_LUNAR,
+            "通知中心农历",
+            "在通知中心（状态栏左侧下滑面板）顶部原日期后直接显示农历：「10月24日周六九月初四」。需先开启「隐藏通知中心铃铛按钮」腾出宽度。",
+            defaultEnabled = false,
+            dependsOn = KEY_SYSTEMUI_HIDE_NOTIF_BELL,
         ),
         Feature(
             KEY_SYSTEMUI_HIDE_CC_POWER,

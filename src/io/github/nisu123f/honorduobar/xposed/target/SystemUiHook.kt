@@ -16,5 +16,7 @@ object SystemUiHook : TargetHook {
         TrioFeature.install(module, param)
         ClockFeature.install(module, param)
         ControlCenterFeature.install(module, param)
+        ShadeLunarFeature.install(module, param)
+        NotifBellFeature.install(module, param)
     }
 }

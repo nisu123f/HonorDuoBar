@@ -25,6 +25,7 @@ import io.github.nisu123f.honorduobar.xposed.core.MountEngine
 import io.github.nisu123f.honorduobar.xposed.core.MountSession
 import io.github.nisu123f.honorduobar.xposed.data.RemoteConfig
 import java.lang.ref.WeakReference
+import java.lang.reflect.Field
 import kotlin.math.min
 
 /**
@@ -36,7 +37,7 @@ import kotlin.math.min
  *
  * 字形（120×120 设计坐标，按 View 尺寸等比缩放）：
  * - 外圈 = 电量环：底部缺口，亮弧长度按电量百分比；
- * - 环内上部 = Wi-Fi 弧（2 条弧 + 1 个点，按 RSSI 档位）；
+ * - 环内上部 = Wi-Fi 弧（2 条弧 + 1 个点，按 RSSI 档位）；飞行模式下改为飞机图标；
  * - 环内下部 = 移动信号点（4 点，单排，只取默认数据卡）；
  * - 环心 = 电量数字（充电时改为闪电，快充琥珀色）；
  * - 无 Wi-Fi 时上部改为 5G/4G 制式文字。
@@ -45,15 +46,17 @@ import kotlin.math.min
  * - HwSystemIcons.onFinishInflate()：注入时机；
  * - HwSystemIcons.onMeasure(int,int)：前置把原生件压回 GONE（防闪根修，见 assertHidden）；
  * - HwSystemIcons.updateIconsAlpha()：胶囊显隐后把状态/网络图标 alpha 拉回可见（防蓝牙被挤掉）；
- * - SignalClusterView.onDarkChanged(Rect,float,int)：跟随状态栏反色（第三参即 tint 色）。
+ * - HwStatusbarContents.refreshTint()：明暗切换统一入口（HonorDuo 同源链路，本机实测有效），
+ *   proceed 后重绘；颜色在绘制时实时采样电池 mTintColor → mBorderView.mDefaultColor →
+ *   mIconTint（复刻 HonorDuo resolveInk 的优先级）。
  */
 object TrioFeature {
 
     private const val HOST_PACKAGE = "com.android.systemui"
     private const val CLS_SYSTEM_ICONS = "com.android.systemui.statusbar.HwSystemIcons"
-    private const val CLS_SIGNAL_CLUSTER = "com.android.systemui.statusbar.SignalClusterView"
+    private const val CLS_STATUSBAR_CONTENTS = "com.android.systemui.statusbar.HwStatusbarContents"
     private const val METHOD_FINISH_INFLATE = "onFinishInflate"
-    private const val METHOD_DARK_CHANGED = "onDarkChanged"
+    private const val METHOD_REFRESH_TINT = "refreshTint"
     private const val METHOD_LAYOUT = "onLayout"
     private const val METHOD_MEASURE = "onMeasure"
     private const val METHOD_UPDATE_ICONS_ALPHA = "updateIconsAlpha"
@@ -72,14 +75,68 @@ object TrioFeature {
     private val ALPHA_GROUP_NAMES = arrayOf("statusIcons", "network_area_icons")
     private const val JUDGE_PREFIX = "SystemUiHook·U9"
     private const val ID_INFLATE = "systemui:trio.systemIcons.onFinishInflate"
-    private const val ID_TINT = "systemui:trio.signalCluster.onDarkChanged"
+    private const val ID_REFRESH_TINT = "systemui:trio.hwContents.refreshTint"
     private const val ID_LAYOUT = "systemui:trio.systemIcons.onLayout"
     private const val ID_MEASURE = "systemui:trio.systemIcons.onMeasure"
     private const val ID_UPDATE_ALPHA = "systemui:trio.systemIcons.updateIconsAlpha"
 
-    /** 状态栏 tint 色（onDarkChanged 第三参），0 = 尚未收到。 */
-    @Volatile private var tintColor = 0
-    @Volatile private var currentView: WeakReference<TrioView>? = null
+    /** 所有已注入的三合一 View（折叠栏/锁屏/覆盖层各一个实例；仅主线程读写）。 */
+    private val trioViews = ArrayList<WeakReference<TrioView>>()
+
+    private fun invalidateAllTrio() {
+        val it = trioViews.iterator()
+        while (it.hasNext()) {
+            val v = it.next().get()
+            if (v == null) it.remove() else v.invalidate()
+        }
+    }
+
+    /**
+     * 反色采样字段：HwStatusBarBatteryView 的 mTintColor / mBorderView（类级 Field，各实例通用；
+     * 电池实例由各 TrioView 的 tintProvider 闭包按实例捕获，避免多状态栏实例串色）。
+     */
+    @Volatile private var batteryTintField: Field? = null
+    @Volatile private var batteryBorderField: Field? = null
+    @Volatile private var borderInkField: Field? = null
+
+    /** 沿类层级找字段（mTintColor 可能声明在电池视图的父类上）。 */
+    private fun findField(type: Class<*>, name: String): Field? {
+        var c: Class<*>? = type
+        while (c != null) {
+            val current = c
+            val f = runCatching { current.getDeclaredField(name) }.getOrNull()
+            if (f != null) {
+                f.isAccessible = true
+                return f
+            }
+            c = c.superclass
+        }
+        return null
+    }
+
+    /** 采样当前反色：电池 mTintColor → 边框 mDefaultColor，取不到返回 0（对齐 HonorDuo resolveInk）。 */
+    private fun sampleBatteryTint(battery: View?): Int {
+        if (battery == null) return 0
+        val tint = runCatching { batteryTintField?.getInt(battery) }.getOrNull() ?: 0
+        if (tint != 0) return tint
+        val border = runCatching { batteryBorderField?.get(battery) }.getOrNull() ?: return 0
+        val f = borderInkField
+            ?: findField(border.javaClass, "mDefaultColor")?.also { borderInkField = it }
+            ?: return 0
+        return runCatching { f.getInt(border) }.getOrNull() ?: 0
+    }
+
+    /** 胶囊避让涉及的两组容器 id（惰性缓存：getIdentifier 字符串查表不适合高频调用）。 */
+    private fun alphaGroupIds(context: Context): IntArray {
+        alphaGroupIdCache?.let { return it }
+        val res = context.resources
+        val pkg = context.packageName
+        val resolved = ALPHA_GROUP_NAMES
+            .mapNotNull { res.getIdentifier(it, "id", pkg).takeIf { id -> id != 0 } }
+            .toIntArray()
+        alphaGroupIdCache = resolved
+        return resolved
+    }
 
     fun install(module: XposedModule, param: XposedModuleInterface.PackageLoadedParam) {
         if (!RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO)) {
@@ -127,12 +184,12 @@ object TrioFeature {
                 description = "U9 三合一胶囊避让（HwSystemIcons.updateIconsAlpha 后恢复状态图标 alpha，胶囊不再挤掉蓝牙等图标）",
             ),
             MountEngine.SimpleTask(
-                className = CLS_SIGNAL_CLUSTER,
-                methodName = METHOD_DARK_CHANGED,
-                paramCount = 3,
+                className = CLS_STATUSBAR_CONTENTS,
+                methodName = METHOD_REFRESH_TINT,
+                paramCount = 0,
                 returnType = "void",
-                id = ID_TINT,
-                description = "U9 三合一反色（SignalClusterView.onDarkChanged 第三参同步自绘颜色）",
+                id = ID_REFRESH_TINT,
+                description = "U9 三合一反色（HwStatusbarContents.refreshTint 后按电池字段重采样重绘，HonorDuo 同源）",
             ),
         )
         session.attemptMount(pending, module, loader) { task -> mountOne(session, task, module, loader) }
@@ -174,14 +231,13 @@ object TrioFeature {
                     runCatching { restoreIconAlpha(host) }
                 }
             }
-            else -> {
+            ID_REFRESH_TINT -> {
+                // refreshTint 返回时电池 mTintColor/mBorderView 已写完（invalidate 只是预约
+                // 下一 vsync 重绘，onDraw 实际发生在本调用栈之后，采到的就是新值）。
                 chain.proceed()
-                val tint = runCatching { chain.getArg(2) as? Int }.getOrNull()
-                if (tint != null && tint != 0) {
-                    tintColor = tint
-                    currentView?.get()?.invalidate()
-                }
+                invalidateAllTrio()
             }
+            else -> chain.proceed()
         }
         null
     }
@@ -190,20 +246,13 @@ object TrioFeature {
     @Volatile private var hiddenIdCache: IntArray? = null
 
     /** 胶囊避让会动 alpha 的两组容器（statusIcons 放蓝牙等状态图标，network_area_icons 放网络图标）。 */
-    @Volatile private var alphaGroupIds: IntArray? = null
+    @Volatile private var alphaGroupIdCache: IntArray? = null
 
     /** 原生按胶囊边界把越界图标 alpha 置 0，这里把它们拉回可见（仅在三合一生效时）。 */
     private fun restoreIconAlpha(host: ViewGroup) {
         if (!RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_KEEP_ICONS)) return
         if (host.findViewWithTag<View>(TAG_VIEW) == null) return
-        val ids = alphaGroupIds ?: run {
-            val res = host.context.resources
-            val pkg = host.context.packageName
-            ALPHA_GROUP_NAMES.mapNotNull { name ->
-                res.getIdentifier(name, "id", pkg).takeIf { it != 0 }
-            }.toIntArray().also { alphaGroupIds = it }
-        }
-        for (id in ids) {
+        for (id in alphaGroupIds(host.context)) {
             val group = host.findViewById<ViewGroup>(id) ?: continue
             for (i in 0 until group.childCount) {
                 val child = group.getChildAt(i) ?: continue
@@ -245,19 +294,26 @@ object TrioFeature {
             systemIcons.findViewById<View>(viewId)?.let { hiddenTargets += it }
         }
         val signalIcons = hiddenTargets.firstOrNull { it.id == id("signalIcons") }
-        val battery = hiddenTargets.firstOrNull { it.id == id("battery") }
+        // 电池在布局里是 system_icons 的直接子件；从 HwSystemIcons 根查，不依赖隐藏清单命中。
+        val battery = host.findViewById<View>(id("battery"))
 
-        // 反色的双保险：onDarkChanged 实时同步；万一宿主隐藏信号组后不再派发，
-        // 就直接读 SignalClusterView.mIconTint（该字段由宿主反色链路持续更新）。
+        // 反色取色复刻 HonorDuo resolveInk：电池 mTintColor（refreshTint 无条件写入，GONE 也是
+        // 新值）→ 电池边框 mBorderView.mDefaultColor → SignalClusterView.mIconTint 兜底。
+        // 电池实例由下方 tintProvider 闭包捕获（与 TrioView 同属一个状态栏实例、同生命周期）。
+        if (battery != null) {
+            batteryTintField = findField(battery.javaClass, "mTintColor")
+            batteryBorderField = findField(battery.javaClass, "mBorderView")
+        }
         val cluster = host.rootView.findViewById<View>(id("signal_cluster"))
         val tintField = runCatching {
             cluster?.javaClass?.getDeclaredField("mIconTint")?.apply { isAccessible = true }
         }.getOrNull()
+        // Wi-Fi 弧 / 信号点 / 电量数字 / 无 Wi-Fi 显示制式：恒开（原子开关已精简，无场景需要关闭）
         val config = TrioConfig(
-            showWifi = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_WIFI),
-            showDots = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_DOTS),
-            showPercent = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_PERCENT),
-            showType = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_TYPE),
+            showWifi = true,
+            showDots = true,
+            showPercent = true,
+            showType = true,
             levelColor = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_LEVEL_COLOR),
             antiBurnIn = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_ANTI_BURNIN),
         )
@@ -267,12 +323,10 @@ object TrioFeature {
                 FeatureCatalog.defaultTrioSize(),
             ),
         )
-        val view = TrioView(ctx, config) {
-            if (tintColor != 0) {
-                tintColor
-            } else {
-                runCatching { tintField?.getInt(cluster) }.getOrNull() ?: 0
-            }
+        val view = TrioView(ctx, config)
+        view.tintProvider = {
+            val sampled = sampleBatteryTint(battery)
+            if (sampled != 0) sampled else runCatching { tintField?.getInt(cluster) }.getOrNull() ?: 0
         }
         view.tag = TAG_VIEW
         // 固定 dp 尺寸，不跟父容器高度拉伸：横屏/锁屏的状态栏行高更大时字形也不会放大。
@@ -297,7 +351,7 @@ object TrioFeature {
                 return true
             }
         })
-        currentView = WeakReference(view)
+        trioViews.add(WeakReference(view))
         module.log(
             Log.INFO,
             MountEngine.TAG,
@@ -323,8 +377,10 @@ object TrioFeature {
     private class TrioView(
         context: Context,
         private val config: TrioConfig,
-        private val tintProvider: () -> Int,
     ) : View(context) {
+
+        /** 反色采样回调：注入后由 TrioFeature 赋值，返回 ARGB 或 0（取不到）。 */
+        var tintProvider: (() -> Int)? = null
 
         private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
@@ -345,6 +401,29 @@ object TrioFeature {
             lineTo(56f, 82f)
             lineTo(69f, 63f)
             lineTo(61f, 63f)
+            close()
+        }
+        /**
+         * 飞行模式图标：机头朝右的剪影，中心 (60, 26)，纵向压扁 0.72（显瘦），
+         * 垂直 11.5–40.6。缩放/位移已烘进坐标，绘制时零矩阵操作。
+         */
+        private val plane = Path().apply {
+            moveTo(79.6f, 26f)    // 机头（右）
+            lineTo(65.9f, 28.7f)  // 机身下缘
+            lineTo(55.3f, 40.6f)  // 下翼尖
+            lineTo(51f, 40.6f)
+            lineTo(56.3f, 29.1f)  // 下翼后缘回机身
+            lineTo(48.9f, 29.9f)  // 尾段下缘
+            lineTo(43.5f, 34.5f)  // 下平尾
+            lineTo(40.4f, 34.5f)
+            lineTo(45.6f, 26f)    // 尾端
+            lineTo(40.4f, 17.6f)  // 上平尾
+            lineTo(43.5f, 17.6f)
+            lineTo(48.9f, 22.3f)  // 尾段上缘
+            lineTo(56.3f, 23f)    // 上翼后缘回机身
+            lineTo(51f, 11.5f)    // 上翼尖
+            lineTo(55.3f, 11.5f)
+            lineTo(65.9f, 23.3f)  // 机身上缘
             close()
         }
 
@@ -404,6 +483,7 @@ object TrioFeature {
         private var charging = false
         private var fullCharging = false
         private var wifiLevel = -1
+        private var airplaneMode = false
         private var mobileLevels = IntArray(0)
         private var netType = ""
 
@@ -474,6 +554,15 @@ object TrioFeature {
                 -1
             }
 
+            // 飞行模式：顶部缺口画飞机图标替代 Wi-Fi（2s 轮询与电量/信号同节奏，切换有≤2s 延迟）。
+            airplaneMode = runCatching {
+                android.provider.Settings.Global.getInt(
+                    context.contentResolver,
+                    android.provider.Settings.Global.AIRPLANE_MODE_ON,
+                    0,
+                ) == 1
+            }.getOrDefault(false)
+
             val sm = context.getSystemService(SubscriptionManager::class.java)
             val tm = context.getSystemService(TelephonyManager::class.java)
             val subs = runCatching { sm?.activeSubscriptionInfoList }.getOrNull()
@@ -515,8 +604,9 @@ object TrioFeature {
         }
 
         private fun resolveForeground(): Int {
-            val tint = tintProvider()
-            if (tint != 0) return tint or 0xFF000000.toInt()
+            val tint = tintProvider?.invoke() ?: 0
+            // 采样值自带 alpha（原生默认白/黑为 0xE6 半透明），原样使用；仅当完全透明时才补不透明。
+            if (tint != 0) return if (tint ushr 24 == 0) tint or 0xFF000000.toInt() else tint
             val attrs = context.obtainStyledAttributes(intArrayOf(android.R.attr.textColorPrimary))
             return try {
                 attrs.getColor(0, Color.WHITE)
@@ -576,10 +666,14 @@ object TrioFeature {
         }
 
         private fun hasTopContent(): Boolean =
-            (config.showWifi && wifiLevel > 0) ||
-                (!(config.showWifi && wifiLevel > 0) && config.showType && netType.isNotEmpty())
+            airplaneMode || (config.showWifi && wifiLevel > 0) || (config.showType && netType.isNotEmpty())
 
         private fun drawTop(canvas: Canvas, fg: Int) {
+            if (airplaneMode) {
+                fillPaint.color = fg
+                canvas.drawPath(plane, fillPaint)
+                return
+            }
             if (config.showWifi && wifiLevel > 0) {
                 // 直接沿用原项目 Wi-Fi 的圆心/半径/起止角，整体上移进顶部缺口。
                 ringPaint.color = fg

@@ -44,6 +44,9 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 去掉系统标题栏（应用名常驻占屏幕空间，无实际作用）
+        requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        actionBar?.hide()
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -51,22 +54,13 @@ class MainActivity : Activity() {
             setPadding(dp(20), dp(24), dp(20), dp(28))
         }
 
-        root.addView(TextView(this).apply {
-            text = "Honor Duo Bar"
-            setTextColor(colorText)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 26f)
-            setTypeface(typeface, Typeface.BOLD)
-        })
-        root.addView(TextView(this).apply {
-            text = "状态栏三合一 · LSPosed 模块"
-            setTextColor(colorSub)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            setPadding(0, dp(6), 0, dp(18))
-        })
-
         root.addView(buildStatusCard())
         root.addView(sectionTitle("状态栏"))
-        root.addView(buildCard(featureRows() + buildClockRow() + buildSizeRow()))
+        root.addView(buildCard(featureRows { it.key !in notifCenterKeys && it.key !in controlCenterKeys } + buildClockRow() + buildSizeRow()))
+        root.addView(sectionTitle("通知中心"))
+        root.addView(buildCard(featureRows { it.key in notifCenterKeys }))
+        root.addView(sectionTitle("控制中心"))
+        root.addView(buildCard(featureRows { it.key in controlCenterKeys }))
         root.addView(buildTipCard())
         root.addView(buildRestartButton())
 
@@ -144,9 +138,9 @@ class MainActivity : Activity() {
         return card
     }
 
-    /** 生成开关行。 */
-    private fun featureRows(): List<View> =
-        FeatureCatalog.features.mapNotNull { feature ->
+    /** 生成开关行（[belongs] 决定哪些功能进本组卡片）。 */
+    private fun featureRows(belongs: (FeatureCatalog.Feature) -> Boolean): List<View> =
+        FeatureCatalog.features.filter(belongs).mapNotNull { feature ->
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -183,6 +177,9 @@ class MainActivity : Activity() {
                         toast("已保存到本地，但 LSPosed 未连接，本次改动不会下发")
                     }
                     if (feature.key == FeatureCatalog.KEY_SYSTEMUI_TRIO) {
+                        renderDependency()
+                    }
+                    if (FeatureCatalog.features.any { it.dependsOn == feature.key }) {
                         renderDependency()
                     }
                 }
@@ -404,17 +401,17 @@ class MainActivity : Activity() {
     }
 
     /**
-     * 三合一是整段 system_icons 的接管者：总开关关闭时其子开关与尺寸行置灰。
+     * 依赖置灰：父开关关闭时其子开关置灰（三合一子开关、农历依赖铃铛隐藏等，按 dependsOn 通用处理）。
      */
     private fun renderDependency() {
-        val trio = switches[FeatureCatalog.KEY_SYSTEMUI_TRIO]?.isChecked ?: false
-        FeatureCatalog.features.filter { it.dependsOn == FeatureCatalog.KEY_SYSTEMUI_TRIO }
-            .forEach { feature ->
-                switches[feature.key]?.let { toggle ->
-                    toggle.isEnabled = trio
-                    toggle.alpha = if (trio) 1f else 0.4f
-                }
+        FeatureCatalog.features.filter { it.dependsOn != null }.forEach { feature ->
+            val parentOn = switches[feature.dependsOn]?.isChecked ?: false
+            switches[feature.key]?.let { toggle ->
+                toggle.isEnabled = parentOn
+                toggle.alpha = if (parentOn) 1f else 0.4f
             }
+        }
+        val trio = switches[FeatureCatalog.KEY_SYSTEMUI_TRIO]?.isChecked ?: false
         if (this::sizeRow.isInitialized) {
             sizeRow.alpha = if (trio) 1f else 0.4f
         }
@@ -439,5 +436,14 @@ class MainActivity : Activity() {
     private companion object {
         const val SIZE_MIN = 18
         const val SIZE_MAX = 26
+
+        /** 「通知中心」分组的功能 key（列表顺序 = 卡内行顺序，铃铛是农历的父依赖须在前）。 */
+        val notifCenterKeys = listOf(
+            FeatureCatalog.KEY_SYSTEMUI_HIDE_NOTIF_BELL,
+            FeatureCatalog.KEY_SYSTEMUI_SHADE_LUNAR,
+        )
+
+        /** 「控制中心」分组的功能 key。 */
+        val controlCenterKeys = listOf(FeatureCatalog.KEY_SYSTEMUI_HIDE_CC_POWER)
     }
 }
