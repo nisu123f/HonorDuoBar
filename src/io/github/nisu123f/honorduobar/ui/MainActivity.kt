@@ -57,7 +57,9 @@ class MainActivity : Activity() {
 
         root.addView(buildStatusCard())
         root.addView(sectionTitle("状态栏"))
-        root.addView(buildCard(featureRows { it.key !in notifCenterKeys && it.key !in controlCenterKeys } + buildClockRow() + buildSizeRow() + buildBtStyleRow()))
+        root.addView(buildCard(featureRows { it.key !in notifCenterKeys && it.key !in controlCenterKeys && it.key !in capsuleKeys } + buildClockRow() + buildSizeRow() + buildBtStyleRow()))
+        root.addView(sectionTitle("灵动胶囊"))
+        root.addView(buildCard(featureRows { it.key in capsuleKeys }))
         root.addView(sectionTitle("通知中心"))
         root.addView(buildCard(featureRows { it.key in notifCenterKeys }))
         root.addView(sectionTitle("控制中心"))
@@ -509,5 +511,11 @@ class MainActivity : Activity() {
 
         /** 「控制中心」分组的功能 key。 */
         val controlCenterKeys = listOf(FeatureCatalog.KEY_SYSTEMUI_HIDE_CC_POWER)
+
+        /** 「灵动胶囊」分组的功能 key（保留图标依赖三合一总开关，须在前）。 */
+        val capsuleKeys = listOf(
+            FeatureCatalog.KEY_SYSTEMUI_TRIO_KEEP_ICONS,
+            FeatureCatalog.KEY_SYSTEMUI_CAPSULE_NO_SCALE,
+        )
     }
 }

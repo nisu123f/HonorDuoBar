@@ -38,7 +38,7 @@ object FeatureCatalog {
     /** 隐藏控制中心关机按钮（右上角电源图标）。 */
     const val KEY_SYSTEMUI_HIDE_CC_POWER = "systemui.hide_cc_power"
 
-    /** 灵动胶囊启用时禁用状态栏缩放（HnPhoneStatusBarAnimController.getScaleValue 恒返回 1.0f，覆盖 0.4f/0.88f 两条缩放路径）。 */
+    /** 灵动胶囊消息上岛常驻时禁用状态栏缩放（上岛缩小动画播完后触发系统原生回弹恢复，展开/关闭动画不动）。 */
     const val KEY_SYSTEMUI_CAPSULE_NO_SCALE = "systemui.capsule_no_scale"
 
     /** 通知中心顶部日期行追加农历（「·九月初四」后缀）。 */
@@ -93,7 +93,7 @@ object FeatureCatalog {
         ),
         Feature(
             KEY_SYSTEMUI_TRIO_KEEP_ICONS,
-            "三合一：胶囊展开时保留图标",
+            "灵动胶囊：展开时保留图标",
             "灵动胶囊展开时，原生会按胶囊边界把蓝牙等状态图标淡出；三合一已腾出空间，开启后保持这些图标可见。",
             defaultEnabled = true,
             dependsOn = KEY_SYSTEMUI_TRIO,
@@ -101,7 +101,7 @@ object FeatureCatalog {
         Feature(
             KEY_SYSTEMUI_CAPSULE_NO_SCALE,
             "灵动胶囊：状态栏不缩放",
-            "灵动胶囊展开/收起时原生会对状态栏做缩放动画（明显缩到 40%，或微缩到 88%）。开启后 hook HnPhoneStatusBarAnimController.getScaleValue 恒返回 1.0f，两条缩放路径同时禁用，状态栏始终按原始尺寸显示。",
+            "消息上岛常驻时，原生会把状态栏图标微缩（约 88%）给胶囊腾位置。开启后等上岛缩小动画播完，立即触发系统原生回弹动画恢复原始大小；点击展开/关闭胶囊的动画保持原生不变。改动需重启系统界面生效。",
             defaultEnabled = false,
         ),
         Feature(

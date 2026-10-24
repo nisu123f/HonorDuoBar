@@ -1,5 +1,7 @@
 package io.github.nisu123f.honorduobar.xposed.target
 
+import android.animation.AnimatorListenerAdapter
+import android.animation.AnimatorSet
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
@@ -82,13 +84,17 @@ object TrioFeature {
     private const val ID_MEASURE = "systemui:trio.systemIcons.onMeasure"
     private const val ID_UPDATE_ALPHA = "systemui:trio.systemIcons.updateIconsAlpha"
     private const val ID_BT_BATTERY = "systemui:trio.hwPhoneStatusBarPolicy.updateBluetooth"
-    private const val ID_CAPSULE_NO_SCALE = "systemui:trio.hwNotchUtils.getScaleValue"
+    private const val ID_CAPSULE_STATE = "systemui:trio.hnAnimController.updateCapsuleState"
 
-    // HwNotchUtils.getScaleValue() 是 PUBLIC STATIC、27 条指令，dex 里有 30+ 处 invoke-static，
-    // R8 未内联。返回 0.88f（灵动胶囊常驻时布局坐标缩放系数）或 1.0f。hook 它恒返回 1.0f 即可
-    // 覆盖所有 30+ 处布局坐标计算（HwSystemIcons/HwStatusbarContents/HnStatusBarPullAnimImpl 等）。
-    private const val CLS_NOTCH_UTILS = "com.android.systemui.utils.HwNotchUtils"
-    private const val METHOD_GET_SCALE_VALUE = "getScaleValue"
+    // 灵动胶囊不缩放（复用系统恢复动画，不自写动画）：
+    // 上岛常驻 → LivelyCapsuleStatusBarHelper.onExpandChanged(1) → updateCapsuleState(1)
+    //   → startStatusBarScaleAnim(true) 播缩小动画，mStatusBarScaleAnim 持有该 AnimatorSet；
+    // 胶囊关闭 → updateCapsuleState(0) → startStatusBarScaleAnim(false) 播原生回弹动画。
+    // 这里 hook updateCapsuleState：i==1 proceed 后给缩小动画挂结束监听，播完立即反射调
+    // startStatusBarScaleAnim(false, false)，走与「关闭胶囊恢复」完全相同的系统路径弹回 1.0。
+    // （此前 hook HwNotchUtils.getScaleValue 恒 1.0f 的方案实测挂载成功但运行时零调用，已废弃。）
+    private const val CLS_ANIM_CONTROLLER = "com.android.systemui.statusbar.phone.HnPhoneStatusBarAnimController"
+    private const val METHOD_UPDATE_CAPSULE_STATE = "updateCapsuleState"
 
     /**
      * 蓝牙耳机电量缓存。
@@ -248,16 +254,16 @@ object TrioFeature {
                     ),
                 )
             }
-            // 灵动胶囊禁用状态栏缩放：双 hook 覆盖布局坐标与动画两条路径。
+            // 灵动胶囊禁用状态栏缩放：hook 胶囊状态入口，上岛缩小动画播完后触发系统原生回弹。
             if (RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_CAPSULE_NO_SCALE)) {
                 add(
                     MountEngine.SimpleTask(
-                        className = CLS_NOTCH_UTILS,
-                        methodName = METHOD_GET_SCALE_VALUE,
-                        paramCount = 0,
-                        returnType = "float",
-                        id = ID_CAPSULE_NO_SCALE,
-                        description = "U9 灵动胶囊状态栏不缩放（hook HwNotchUtils.getScaleValue 恒返回 1.0f）",
+                        className = CLS_ANIM_CONTROLLER,
+                        methodName = METHOD_UPDATE_CAPSULE_STATE,
+                        paramCount = 1,
+                        returnType = "void",
+                        id = ID_CAPSULE_STATE,
+                        description = "U9 灵动胶囊状态栏不缩放（updateCapsuleState(1) 后复用系统 startStatusBarScaleAnim(false) 回弹）",
                     ),
                 )
             }
@@ -272,9 +278,15 @@ object TrioFeature {
         loader: ClassLoader,
     ): MountEngine.Result = session.mount(task, module, loader) { chain ->
         when (task.id) {
-            ID_CAPSULE_NO_SCALE -> {
-                // hook HwNotchUtils.getScaleValue() 恒返回 1.0f（布局坐标路径）
-                1.0f
+            ID_CAPSULE_STATE -> {
+                chain.proceed()
+                // i==1 = 胶囊上岛常驻（系统刚启动缩小动画）。只有 i==1 才恢复：
+                // i==2 是点击展开（状态栏缩到消失属预期），i==0 是关闭（系统自己回弹）。
+                val state = chain.args?.firstOrNull() as? Int
+                if (state == 1) {
+                    runCatching { chain.thisObject?.let { scheduleCapsuleScaleRestore(it) } }
+                }
+                null
             }
             ID_MEASURE -> {
                 // 防闪根修：必须在 measure 之前压回 GONE——宿主电量/信号更新把原生件置回
@@ -295,8 +307,8 @@ object TrioFeature {
                 chain.proceed()
                 (chain.thisObject as? ViewGroup)?.let { host ->
                     runCatching { assertHidden(host) }
-                    // 灵动胶囊不缩放：onLayout 时强制重置子树 scaleX/scaleY = 1.0f。
-                    // 动画突兀但能用（常驻时图标恢复正常大小）。
+                    // 灵动胶囊不缩放：onLayout 兜底瞬时 snap（主路径是 updateCapsuleState hook
+                    // 触发系统原生回弹动画；这里只兜无动画路径的残留缩放）。
                     if (RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_CAPSULE_NO_SCALE)) {
                         runCatching { resetSubtreeScale(host) }
                     }
@@ -390,18 +402,77 @@ object TrioFeature {
     }
 
     /**
-     * 递归检测 View 树中 scaleX/scaleY != 1.0f 的节点，对其做平滑动画过渡到 1.0f。
-     * 灵动胶囊的缩放通过 ObjectAnimator.ofFloat(view, "scaleX", ...) 直写 View 属性，
-     * 这里用 ViewPropertyAnimator 反向动画回 1.0f，避免突兀跳变。
-     * 只对顶层检测到的第一个缩放节点做动画（子 View 跟随父容器），避免全树动画开销。
+     * 上岛缩小动画播完 → 触发系统原生回弹（startStatusBarScaleAnim(false)）。
+     *
+     * mStatusBarScaleAnim 非空 = 缩小动画在跑：挂结束监听，播完走系统恢复路径（原生 spring，零自写动画）。
+     * 为空 = forbid 模式（卡片置顶等，无动画直接置状态）：立即翻回状态，视觉上此模式图标本就隐藏。
+     */
+    private fun scheduleCapsuleScaleRestore(controller: Any) {
+        val animField = scaleAnimField
+            ?: findField(controller.javaClass, "mStatusBarScaleAnim")?.also { scaleAnimField = it }
+            ?: return
+        val anim = animField.get(controller) as? AnimatorSet
+        if (anim != null) {
+            capsuleRestoreRunning = true
+            anim.addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    // post 出当前调用栈：避免与外层 updateCapsuleState(0)（关胶囊）的 end() 重入。
+                    mainHandler.post { runCatching { invokeNativeScaleRestore(controller) } }
+                }
+            })
+        } else {
+            invokeNativeScaleRestore(controller)
+        }
+    }
+
+    /** 反射调 startStatusBarScaleAnim(false, false)（胶囊关闭时系统恢复大小的同一入口）。 */
+    private fun invokeNativeScaleRestore(controller: Any) {
+        // 仅胶囊仍常驻（mCapsuleExpandState==1）才恢复：若用户已关胶囊（==0），系统自己会回弹，跳过防重复。
+        val stateField = capsuleExpandStateField
+            ?: findField(controller.javaClass, "mCapsuleExpandState")?.also { capsuleExpandStateField = it }
+        if (stateField != null && runCatching { stateField.getInt(controller) }.getOrDefault(-1) != 1) {
+            capsuleRestoreRunning = false
+            return
+        }
+        val method = startScaleAnimMethod ?: runCatching {
+            controller.javaClass.getDeclaredMethod(
+                "startStatusBarScaleAnim",
+                Boolean::class.javaPrimitiveType,
+                Boolean::class.javaPrimitiveType,
+            ).also { it.isAccessible = true }
+        }.getOrNull()?.also { startScaleAnimMethod = it } ?: run {
+            capsuleRestoreRunning = false
+            return
+        }
+        runCatching { method.invoke(controller, false, false) }
+        // 回弹动画启动则挂监听清标志（期间 onLayout 兜底不打断 spring）；未启动（early return）立即清。
+        val upAnim = scaleAnimField?.get(controller) as? AnimatorSet
+        if (upAnim != null) {
+            upAnim.addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    capsuleRestoreRunning = false
+                }
+            })
+        } else {
+            capsuleRestoreRunning = false
+        }
+    }
+
+    @Volatile private var scaleAnimField: Field? = null
+    @Volatile private var capsuleExpandStateField: Field? = null
+    @Volatile private var startScaleAnimMethod: java.lang.reflect.Method? = null
+    /** 系统恢复动画在跑标志：true 期间 onLayout 兜底不瞬时 snap，避免打断原生 spring。 */
+    @Volatile private var capsuleRestoreRunning = false
+
+    /**
+     * onLayout 兜底：瞬时重置子树 scaleX/scaleY = 1.0f（非动画路径残留，如 forbid 模式的直接
+     * setScaleXY(0.88)）。系统恢复动画在跑（capsuleRestoreRunning）时跳过，不打断原生回弹。
      */
     private fun resetSubtreeScale(view: View) {
+        if (capsuleRestoreRunning) return
         if (view.scaleX != 1.0f || view.scaleY != 1.0f) {
-            view.animate()
-                .scaleX(1.0f)
-                .scaleY(1.0f)
-                .setDuration(300)
-                .start()
+            view.scaleX = 1.0f
+            view.scaleY = 1.0f
             return  // 子 View 跟随父容器缩放，无需递归
         }
         if (view is ViewGroup) {
