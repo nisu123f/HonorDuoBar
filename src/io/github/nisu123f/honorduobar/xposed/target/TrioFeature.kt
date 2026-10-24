@@ -2,6 +2,8 @@ package io.github.nisu123f.honorduobar.xposed.target
 
 import android.animation.AnimatorListenerAdapter
 import android.animation.AnimatorSet
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
@@ -28,6 +30,7 @@ import io.github.nisu123f.honorduobar.xposed.core.MountSession
 import io.github.nisu123f.honorduobar.xposed.data.RemoteConfig
 import java.lang.ref.WeakReference
 import java.lang.reflect.Field
+import java.util.WeakHashMap
 import kotlin.math.min
 
 /**
@@ -130,7 +133,20 @@ object TrioFeature {
     /** 缓存反射字段（getDeclaredField 是低频调用但仍要避免每次重建）。 */
     @Volatile private var btPolicyBluetoothField: Field? = null
     @Volatile private var btControllerBatteryLevelField: Field? = null
-    @Volatile private var btPolicyIconControllerField: Field? = null
+
+    /** 蓝牙电量播种进行中（防重入；结果回调/断开时复位）。 */
+    @Volatile private var btSeeding = false
+
+    // ---- 原生蓝牙图标单件隐藏（与信号/Wi-Fi 同一 View 显隐体系） ----
+    // 蓝牙图标与闹钟等混在 statusIcons 组内，不能整组 GONE；它是 StatusBarIconController
+    // 动态 addView 的（无资源 id），但 StatusBarIconView.mSlot 恒为 "bluetooth"，按 slot 名
+    // 在组内定位单件后，即可与信号/Wi-Fi 一样走 View visibility，面板切换无需特判。
+    /** statusIcons 容器 id（惰性缓存，0=未解析）。 */
+    @Volatile private var statusIconsIdCache = 0
+    /** StatusBarIconView.mSlot 反射缓存（public final，getField 一次即可）。 */
+    @Volatile private var iconSlotField: Field? = null
+    /** 各宿主的蓝牙图标 View 缓存（仅主线程读写；BT 状态变化时清空重查）。 */
+    private val btIconViews = WeakHashMap<ViewGroup, WeakReference<View>>()
 
     /** 主线程 Handler：蓝牙 hook 回调可能在 binder 线程，View 操作必须 post 回主线程。 */
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -489,19 +505,17 @@ object TrioFeature {
                         cachedBtBattery = v
                         mainHandler.post { invalidateAllTrio() }
                     }
-                    // 连耳机且电量可读：通过 StatusBarIconController 压制原生蓝牙图标，
-                    // 避免与三合一里的耳机电量重复显示。断开/电量未知时 proceed 原生结果生效。
-                    if (v in 0..100) {
-                        val iconCtrlField = btPolicyIconControllerField
-                            ?: findField(policy.javaClass, "mIconController")
-                                ?.also { btPolicyIconControllerField = it } ?: return@runCatching
-                        val iconCtrl = iconCtrlField.get(policy) ?: return@runCatching
-                        runCatching {
-                            iconCtrl.javaClass
-                                .getMethod("setIconVisibility", String::class.java, Boolean::class.javaPrimitiveType)
-                                .invoke(iconCtrl, "bluetooth", false)
-                        }
+                    // BT 状态/电量变化可能增删图标 View：回主线程清缓存并按融合状态重设
+                    // 蓝牙单件显隐（与信号/Wi-Fi 同 View 显隐体系）。断开/电量未知时原生
+                    // proceed 已重设图标显隐，helper 内部按融合状态判定，不会误动。
+                    mainHandler.post {
+                        btIconViews.clear()
+                        applyBluetoothIconVisibilityAll()
                     }
+                    // 电量未知（典型：SystemUI 重启后 BATTERY_LEVEL_CHANGED 尚未再上报）：
+                    // 主动经 HEADSET 代理查缓存电量并写回原生状态，让三合一与原生图标
+                    // 立即显示电量，无需断开重连耳机。
+                    if (v !in 0..100) seedBluetoothBattery(policy, controller)
                 }
             }
             else -> chain.proceed()
@@ -537,6 +551,8 @@ object TrioFeature {
                 if (v.visibility != View.GONE) v.visibility = View.GONE
             }
         }
+        // 蓝牙单件同理重申（BT 图标刷新可能绕过 layout，这里与 preDraw 双保险）。
+        applyBluetoothIconVisibility(host, expanded = false)
     }
 
     /** 要隐藏的原生件 id（惰性缓存：getIdentifier 字符串查表不适合高频调用；id 按包名解析，各宿主实例通用）。 */
@@ -591,6 +607,114 @@ object TrioFeature {
         }
     }
 
+    /** 蓝牙电量融合当前是否生效（开关开 + 耳机电量可读）。 */
+    private fun btMerged(): Boolean = cachedBtBattery in 0..100 &&
+        RemoteConfig.int(FeatureCatalog.KEY_SYSTEMUI_TRIO_BT_BATTERY, 0) > 0
+
+    /**
+     * 蓝牙电量播种：SystemUI 重启后原生 mBluetoothBatteryLevel 未就绪（原生 HEADSET 代理
+     * 播种路径把 0~100 原始值传给只接受 1~10 档位的 updateBluetoothEarBattery，被校验
+     * 拒绝，故原生自己也得等下次 BATTERY_LEVEL_CHANGED 上报）。这里自行查已连接设备的
+     * 缓存电量（BluetoothDevice.getBatteryLevel 读系统服务侧缓存，无需耳机重新上报），
+     * 按原生 receiver 口径写回字段 + 重算图标档位 + 重调 updateBluetooth 刷新原生图标；
+     * 该调用会再过一次本钩子，届时电量已知，不会再触发播种。
+     */
+    private fun seedBluetoothBattery(policy: Any, controller: Any) {
+        if (btSeeding) return
+        val adapter = runCatching { BluetoothAdapter.getDefaultAdapter() }.getOrNull() ?: return
+        if (!runCatching { adapter.isEnabled }.getOrDefault(false)) return
+        val ctxField = findField(policy.javaClass, "mContext") ?: return
+        val ctx = runCatching { ctxField.get(policy) as? Context }.getOrNull() ?: return
+        val levelField = btControllerBatteryLevelField ?: return
+        btSeeding = true
+        runCatching {
+            adapter.getProfileProxy(ctx, object : BluetoothProfile.ServiceListener {
+                override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+                    if (profile == BluetoothProfile.HEADSET) {
+                        val dev = runCatching { proxy.connectedDevices?.firstOrNull() }.getOrNull()
+                        // getBatteryLevel 不在编译用 android.jar 公开 API 内（运行时存在，原生直连），反射读取。
+                        val level = dev?.let {
+                            runCatching {
+                                it.javaClass.getMethod("getBatteryLevel").invoke(it) as Int
+                            }.getOrDefault(-1)
+                        } ?: -1
+                        val address = dev?.address
+                        if (level in 1..100 && !address.isNullOrEmpty()) {
+                            mainHandler.post {
+                                runCatching {
+                                    levelField.setInt(controller, level)
+                                    val rounded = if (level > 10) Math.round(level / 10f) else 1
+                                    controller.javaClass
+                                        .getMethod(
+                                            "updateBluetoothEarBattery",
+                                            Int::class.javaPrimitiveType,
+                                            String::class.java,
+                                        )
+                                        .invoke(controller, rounded, address)
+                                    policy.javaClass.getMethod("updateBluetooth").invoke(policy)
+                                    logDiag(Log.INFO, "蓝牙电量播种成功: level=$level")
+                                }
+                            }
+                        }
+                    }
+                    runCatching { adapter.closeProfileProxy(profile, proxy) }
+                    btSeeding = false
+                }
+
+                override fun onServiceDisconnected(profile: Int) {
+                    btSeeding = false
+                }
+            }, BluetoothProfile.HEADSET)
+        }.onFailure { btSeeding = false }
+    }
+
+    /** 对所有已注入宿主按融合状态与面板状态重设蓝牙图标单件显隐（仅主线程）。 */
+    private fun applyBluetoothIconVisibilityAll() {
+        val it = injectedHosts.iterator()
+        while (it.hasNext()) {
+            val host = it.next().get()
+            if (host == null) it.remove() else runCatching { applyBluetoothIconVisibility(host, panelExpanded) }
+        }
+    }
+
+    /**
+     * 蓝牙图标显隐与信号/Wi-Fi 同一 View 体系：融合生效且面板收起时 GONE，展开时恢复
+     * VISIBLE；融合未生效（断开/电量未知/开关关）时不触碰——原生 updateBluetooth 的
+     * proceed 已按连接状态重设过图标显隐，避免把已关闭的蓝牙图标误点亮。
+     */
+    private fun applyBluetoothIconVisibility(host: ViewGroup, expanded: Boolean) {
+        if (!btMerged()) return
+        val v = findBluetoothIconView(host) ?: return
+        val want = if (expanded) View.VISIBLE else View.GONE
+        if (v.visibility != want) v.visibility = want
+    }
+
+    /**
+     * 定位宿主 statusIcons 组内的蓝牙图标单件（StatusBarIconView.mSlot == "bluetooth"）。
+     * 结果按宿主缓存；BT 状态变化时由 updateBluetooth 钩子清空重查。
+     */
+    private fun findBluetoothIconView(host: ViewGroup): View? {
+        btIconViews[host]?.get()?.let { if (it.parent != null) return it }
+        val groupId = statusIconsIdCache.takeIf { it != 0 } ?: run {
+            val id = host.context.resources.getIdentifier("statusIcons", "id", host.context.packageName)
+            statusIconsIdCache = id
+            id
+        }
+        if (groupId == 0) return null
+        val group = host.findViewById<ViewGroup>(groupId) ?: return null
+        for (i in 0 until group.childCount) {
+            val child = group.getChildAt(i) ?: continue
+            val f = iconSlotField ?: runCatching {
+                child.javaClass.getField("mSlot")
+            }.getOrNull()?.also { iconSlotField = it } ?: continue
+            if (runCatching { f.get(child) as? String }.getOrNull() == "bluetooth") {
+                btIconViews[host] = WeakReference(child)
+                return child
+            }
+        }
+        return null
+    }
+
     private fun applyHostVisibility(host: ViewGroup, expanded: Boolean) {
         val trio = host.findViewWithTag<View>(TAG_VIEW) ?: return
         if (expanded) {
@@ -608,6 +732,8 @@ object TrioFeature {
             }
             trio.visibility = View.VISIBLE
         }
+        // 蓝牙单件与上面同体系，随面板状态一并翻转。
+        applyBluetoothIconVisibility(host, expanded)
     }
 
     /**
@@ -757,12 +883,14 @@ object TrioFeature {
         // 这里挂 pre-draw 每帧重申；GONE→GONE 是空操作，开销可忽略。
         // 面板展开（切原生图标）期间跳过重申，让原生件保持可见。
         hiddenTargets.forEach { it.visibility = View.GONE }
+        applyBluetoothIconVisibility(host, panelExpanded)
         host.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
             override fun onPreDraw(): Boolean {
                 if (!panelExpanded) {
                     for (target in hiddenTargets) {
                         if (target.visibility != View.GONE) target.visibility = View.GONE
                     }
+                    applyBluetoothIconVisibility(host, expanded = false)
                 }
                 return true
             }
