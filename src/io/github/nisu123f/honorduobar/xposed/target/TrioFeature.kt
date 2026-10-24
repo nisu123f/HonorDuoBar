@@ -85,6 +85,8 @@ object TrioFeature {
     private const val ID_UPDATE_ALPHA = "systemui:trio.systemIcons.updateIconsAlpha"
     private const val ID_BT_BATTERY = "systemui:trio.hwPhoneStatusBarPolicy.updateBluetooth"
     private const val ID_CAPSULE_STATE = "systemui:trio.hnAnimController.updateCapsuleState"
+    private const val ID_PANEL_EXPAND = "systemui:trio.hwPanelView.setExpandedHeightInternal"
+    private const val ID_SHOWING_TYPE = "systemui:trio.hnPanelController.setPanelShowingType"
 
     // 灵动胶囊不缩放（复用系统恢复动画，不自写动画）：
     // 上岛常驻 → LivelyCapsuleStatusBarHelper.onExpandChanged(1) → updateCapsuleState(1)
@@ -95,6 +97,21 @@ object TrioFeature {
     // （此前 hook HwNotchUtils.getScaleValue 恒 1.0f 的方案实测挂载成功但运行时零调用，已废弃。）
     private const val CLS_ANIM_CONTROLLER = "com.android.systemui.statusbar.phone.HnPhoneStatusBarAnimController"
     private const val METHOD_UPDATE_CAPSULE_STATE = "updateCapsuleState"
+
+    // 下拉面板切原生图标：MagicOS 11 通知中心/控制中心共用同一 PanelView 展开机制，
+    // 唯一实体子类 NotificationPanelView 继承 HwPanelView（覆写 setExpandedHeightInternal，
+    // super 调用后 updateBlurView），hook HwPanelView 的覆写实现即可覆盖两个面板。
+    // 展开判定取 PanelView.mExpandedFraction > 0（proceed 后读，含滑动半展开）；
+    // heads-up 横幅也会抬升 mExpandedFraction，用 isPanelVisibleBecauseOfHeadsUp() 剔除。
+    private const val CLS_PANEL_VIEW = "com.android.systemui.statusbar.phone.HwPanelView"
+    private const val METHOD_SET_EXPANDED_HEIGHT = "setExpandedHeightInternal"
+    private const val METHOD_HEADS_UP_VISIBLE = "isPanelVisibleBecauseOfHeadsUp"
+    // 收起兜底：MagicOS 收起动画走自家 HnStatusBarPullAnim，末端 fraction 归零那一步可能
+    // 不进 setExpandedHeightInternal（或该 final 短方法在 odex 里被内联跳过），导致展开态卡住。
+    // setPanelShowingType(0) 是所有收起路径（fling/无动画/锁屏/熄屏）的必经收口，挂上后
+    // 轮询 mExpandedFraction 归零再恢复三合一（>0 说明是面板互切/重新展开，不动）。
+    private const val CLS_PANEL_CONTROLLER = "com.android.systemui.statusbar.phone.HnPanelViewControllerImpl"
+    private const val METHOD_SET_SHOWING_TYPE = "setPanelShowingType"
 
     /**
      * 蓝牙耳机电量缓存。
@@ -120,6 +137,80 @@ object TrioFeature {
 
     /** 所有已注入的三合一 View（折叠栏/锁屏/覆盖层各一个实例；仅主线程读写）。 */
     private val trioViews = ArrayList<WeakReference<TrioView>>()
+
+    // ---- 下拉面板切原生图标 ----
+    /** 面板展开全局状态（任一 HwPanelView 展开即 true；所有三合一宿主同步切原生）。 */
+    @Volatile private var panelExpanded = false
+    /** PanelView.mExpandedFraction 反射缓存（字段声明在基类 PanelView 上，findField 沿层级上找）。 */
+    @Volatile private var panelFractionField: Field? = null
+    /** NotificationPanelView.isPanelVisibleBecauseOfHeadsUp 反射缓存（public final，仅调用不 hook）。 */
+    @Volatile private var panelHeadsUpMethod: java.lang.reflect.Method? = null
+    /** 已注入三合一的 HwSystemIcons 宿主实例（仅主线程读写；面板状态切换时逐一切换显隐）。 */
+    private val injectedHosts = ArrayList<WeakReference<ViewGroup>>()
+
+    /** HnPanelViewControllerImpl.mPanelView 字段缓存（指向 NotificationPanelView）。 */
+    @Volatile private var controllerPanelField: Field? = null
+    /** install 时缓存的 module 引用，供对象级回调写 LSPosed 模块日志。 */
+    @Volatile private var logModule: XposedModule? = null
+
+    /** 诊断日志（模块日志可见；module 未就绪时退化 logcat）。受「诊断日志」全局开关门控。 */
+    private fun logDiag(priority: Int, msg: String) {
+        if (!RemoteConfig.isEnabled(FeatureCatalog.KEY_DEBUG_LOG)) return
+        logModule?.log(priority, MountEngine.TAG, "$JUDGE_PREFIX $msg")
+            ?: Log.i(MountEngine.TAG, "$JUDGE_PREFIX $msg")
+    }
+    /** 收起归零轮询状态（仅主线程）：收起信号后的目标控制器与已试次数。 */
+    private var collapseSettleController: WeakReference<Any>? = null
+    private var collapseSettleAttempts = 0
+
+    /**
+     * 收起归零轮询：setPanelShowingType(0) 在收起动画开始时就触发，此时 fraction 还没归零；
+     * 每 100ms 复读一次，归零才真正恢复三合一（面板互切/中途重新展开时 fraction 恒 >0，自动放弃）。
+     * fraction 钩子若在收起末端正常触发会先一步恢复，轮询看到 panelExpanded==false 即退出。
+     */
+    private val collapseSettleTask = object : Runnable {
+        override fun run() {
+            val controller = collapseSettleController?.get() ?: return
+            val fraction = readPanelFraction(controller)
+            if (fraction <= 0f) {
+                collapseSettleController = null
+                if (panelExpanded) {
+                    panelExpanded = false
+                    logDiag(Log.INFO, "面板收起(轮询兜底): fraction=$fraction → 恢复三合一 hosts=${injectedHosts.size}")
+                    applyPanelVisibility(false)
+                }
+                return
+            }
+            if (++collapseSettleAttempts >= 10) {
+                logDiag(Log.WARN, "面板收起轮询超时放弃: fraction=$fraction panelExpanded=$panelExpanded")
+                collapseSettleController = null
+                return
+            }
+            mainHandler.postDelayed(this, 100L)
+        }
+    }
+
+    private fun scheduleCollapseSettle(controller: Any) {
+        // 宿主收起流程会重复发 2-3 次 setPanelShowingType(0)，已有轮询在跑就直接复用，避免重复刷屏与重置计时。
+        if (collapseSettleController != null) return
+        logDiag(Log.INFO, "收到收起信号 setPanelShowingType(0)，开始轮询归零 panelExpanded=$panelExpanded")
+        collapseSettleAttempts = 0
+        collapseSettleController = WeakReference(controller)
+        mainHandler.removeCallbacks(collapseSettleTask)
+        mainHandler.postDelayed(collapseSettleTask, 100L)
+    }
+
+    /** 经控制器 mPanelView 读 PanelView.mExpandedFraction；读不到返回 -1（按已收起处理）。 */
+    private fun readPanelFraction(controller: Any): Float {
+        val pvField = controllerPanelField
+            ?: findField(controller.javaClass, "mPanelView")?.also { controllerPanelField = it }
+            ?: return -1f
+        val panel = runCatching { pvField.get(controller) }.getOrNull() ?: return -1f
+        val fField = panelFractionField
+            ?: findField(panel.javaClass, "mExpandedFraction")?.also { panelFractionField = it }
+            ?: return -1f
+        return runCatching { fField.getFloat(panel) }.getOrDefault(-1f)
+    }
 
     private fun invalidateAllTrio() {
         val it = trioViews.iterator()
@@ -181,6 +272,7 @@ object TrioFeature {
             logDisabled(module, FeatureCatalog.KEY_SYSTEMUI_TRIO, "SystemUiHook·U9")
             return
         }
+        logModule = module
         val loader = param.defaultClassLoader
         val session = MountEngine.open(
             "SystemUiHook·U9",
@@ -267,6 +359,40 @@ object TrioFeature {
                     ),
                 )
             }
+            // 下拉面板切原生图标：开关关（需重启 SystemUI）时不挂，面板状态恒按未展开处理。
+            if (RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_PANEL_NATIVE_ICONS)) {
+                add(
+                    MountEngine.SimpleTask(
+                        className = CLS_PANEL_VIEW,
+                        methodName = METHOD_SET_EXPANDED_HEIGHT,
+                        paramCount = 1,
+                        returnType = "void",
+                        id = ID_PANEL_EXPAND,
+                        description = "U9 下拉面板切原生图标（HwPanelView.setExpandedHeightInternal 后按 mExpandedFraction 切换三合一/原生显隐）",
+                    ),
+                )
+                add(
+                    MountEngine.SimpleTask(
+                        className = CLS_PANEL_CONTROLLER,
+                        methodName = METHOD_SET_SHOWING_TYPE,
+                        paramCount = 1,
+                        returnType = "void",
+                        id = ID_SHOWING_TYPE,
+                        description = "U9 面板收起恢复三合一兜底（HnPanelViewControllerImpl.setPanelShowingType(0) 后轮询 fraction 归零恢复）",
+                    ),
+                )
+            }
+        }
+        // 诊断：记录条件任务挂载状态（日志确认开关是否生效及挂载了哪些 hook）。
+        if (RemoteConfig.isEnabled(FeatureCatalog.KEY_DEBUG_LOG)) {
+            module.log(
+                Log.INFO,
+                MountEngine.TAG,
+                "$JUDGE_PREFIX 条件任务: btStyle=${RemoteConfig.int(FeatureCatalog.KEY_SYSTEMUI_TRIO_BT_BATTERY, 0)}," +
+                    " capsuleNoScale=${RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_CAPSULE_NO_SCALE)}," +
+                    " panelNative=${RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_PANEL_NATIVE_ICONS)}," +
+                    " 任务数=${pending.size}",
+            )
         }
         session.attemptMount(pending, module, loader) { task -> mountOne(session, task, module, loader) }
     }
@@ -292,6 +418,7 @@ object TrioFeature {
                 // 防闪根修：必须在 measure 之前压回 GONE——宿主电量/信号更新把原生件置回
                 // VISIBLE 后，若 measure 已按 VISIBLE 排版，再 GONE 就会触发「含电池宽度→
                 // 回跳」的单帧抖动（状态栏闪一下）。这里前置处理，本帧排版即正确。
+                // 面板展开时跳过：此时原生件应正常参与排版（切原生图标）。
                 (chain.thisObject as? ViewGroup)?.let { host ->
                     runCatching { assertHidden(host) }
                 }
@@ -327,6 +454,23 @@ object TrioFeature {
                 // 下一 vsync 重绘，onDraw 实际发生在本调用栈之后，采到的就是新值）。
                 chain.proceed()
                 invalidateAllTrio()
+            }
+            ID_PANEL_EXPAND -> {
+                // 面板滑动/动画期间逐帧回调：仅读字段比对状态，翻转时才动 View，开销可忽略。
+                chain.proceed()
+                (chain.thisObject as? View)?.let { panel ->
+                    runCatching { updatePanelState(panel) }
+                }
+                null
+            }
+            ID_SHOWING_TYPE -> {
+                // 收起兜底：byte 0 = 面板收起（fling/无动画/锁屏等所有路径的收口）。
+                // 触发时收起动画刚开始，fraction 未归零，交给轮询等归零后恢复三合一。
+                chain.proceed()
+                if ((chain.args?.firstOrNull() as? Byte)?.toInt() == 0) {
+                    runCatching { chain.thisObject?.let { scheduleCollapseSettle(it) } }
+                }
+                null
             }
             ID_BT_BATTERY -> {
                 // proceed 后 thisObject.mBluetooth 已是当前 HwBluetoothControllerImpl 实例，
@@ -385,19 +529,84 @@ object TrioFeature {
 
     /** 宿主偶尔会把电池/信号重新显示（电量/信号更新、AOD/胶囊切换），测量/布局时重申一次隐藏。 */
     private fun assertHidden(host: ViewGroup) {
+        // 面板展开（切原生图标）期间不再压 GONE，否则与切换意图打架，原生件永远显示不出来。
+        if (panelExpanded) return
         if (host.findViewWithTag<View>(TAG_VIEW) == null) return
-        // 除整组 signalIcons 与 battery 外，再兜底隐藏组内单件（个别版本会把单件挂到别的容器）
-        val ids = hiddenIdCache ?: run {
-            val res = host.context.resources
-            val pkg = host.context.packageName
-            HIDDEN_IDS.mapNotNull { name ->
-                res.getIdentifier(name, "id", pkg).takeIf { it != 0 }
-            }.toIntArray().also { hiddenIdCache = it }
-        }
-        for (id in ids) {
+        for (id in hiddenIds(host)) {
             host.findViewById<View>(id)?.let { v ->
                 if (v.visibility != View.GONE) v.visibility = View.GONE
             }
+        }
+    }
+
+    /** 要隐藏的原生件 id（惰性缓存：getIdentifier 字符串查表不适合高频调用；id 按包名解析，各宿主实例通用）。 */
+    private fun hiddenIds(host: ViewGroup): IntArray {
+        hiddenIdCache?.let { return it }
+        val res = host.context.resources
+        val pkg = host.context.packageName
+        // 除整组 signalIcons 与 battery 外，再兜底隐藏组内单件（个别版本会把单件挂到别的容器）
+        return HIDDEN_IDS.mapNotNull { name ->
+            res.getIdentifier(name, "id", pkg).takeIf { it != 0 }
+        }.toIntArray().also { hiddenIdCache = it }
+    }
+
+    /**
+     * 面板展开状态更新（setExpandedHeightInternal proceed 后调用，主线程）。
+     *
+     * mExpandedFraction > 0 即视为展开（含滑动半展开，与 isFullyCollapsed 口径一致）；
+     * heads-up 横幅抬升的展开不算（用户没下拉面板，状态栏行应保持三合一）。
+     * 仅在展开态翻转时逐宿主切换显隐，滑动期间的逐帧回调走纯字段比对，零 View 操作。
+     */
+    private fun updatePanelState(panel: View) {
+        val fractionField = panelFractionField
+            ?: findField(panel.javaClass, "mExpandedFraction")?.also { panelFractionField = it }
+            ?: return
+        val fraction = runCatching { fractionField.getFloat(panel) }.getOrDefault(0f)
+        var expanded = fraction > 0f
+        // heads-up 反射调用只在 0→1 翻转前做一次：展开稳态下不再逐帧 invoke；
+        // 同时避免面板已开时恰好有 pinned heads-up 被误判为「仅横幅展开」而错误恢复三合一。
+        if (expanded && !panelExpanded) {
+            val headsUp = panelHeadsUpMethod ?: runCatching {
+                panel.javaClass.getMethod(METHOD_HEADS_UP_VISIBLE)
+            }.getOrNull()?.also { panelHeadsUpMethod = it }
+            if (headsUp != null &&
+                runCatching { headsUp.invoke(panel) as? Boolean }.getOrNull() == true
+            ) {
+                expanded = false
+            }
+        }
+        if (expanded != panelExpanded) {
+            panelExpanded = expanded
+            logDiag(Log.INFO, "面板状态切换(fraction钩子): expanded=$expanded fraction=$fraction hosts=${injectedHosts.size}")
+            applyPanelVisibility(expanded)
+        }
+    }
+
+    /** 面板展开态翻转：所有已注入宿主统一切换（展开→原生件 VISIBLE + 三合一 GONE；收起→反之）。 */
+    private fun applyPanelVisibility(expanded: Boolean) {
+        val it = injectedHosts.iterator()
+        while (it.hasNext()) {
+            val host = it.next().get()
+            if (host == null) it.remove() else runCatching { applyHostVisibility(host, expanded) }
+        }
+    }
+
+    private fun applyHostVisibility(host: ViewGroup, expanded: Boolean) {
+        val trio = host.findViewWithTag<View>(TAG_VIEW) ?: return
+        if (expanded) {
+            trio.visibility = View.GONE
+            for (id in hiddenIds(host)) {
+                host.findViewById<View>(id)?.let { v ->
+                    if (v.visibility != View.VISIBLE) v.visibility = View.VISIBLE
+                }
+            }
+        } else {
+            for (id in hiddenIds(host)) {
+                host.findViewById<View>(id)?.let { v ->
+                    if (v.visibility != View.GONE) v.visibility = View.GONE
+                }
+            }
+            trio.visibility = View.VISIBLE
         }
     }
 
@@ -546,15 +755,21 @@ object TrioFeature {
 
         // 宿主在电量/信号更新时可能把子视图重新设为 VISIBLE（且不一定触发 onLayout），
         // 这里挂 pre-draw 每帧重申；GONE→GONE 是空操作，开销可忽略。
+        // 面板展开（切原生图标）期间跳过重申，让原生件保持可见。
         hiddenTargets.forEach { it.visibility = View.GONE }
         host.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
             override fun onPreDraw(): Boolean {
-                for (target in hiddenTargets) {
-                    if (target.visibility != View.GONE) target.visibility = View.GONE
+                if (!panelExpanded) {
+                    for (target in hiddenTargets) {
+                        if (target.visibility != View.GONE) target.visibility = View.GONE
+                    }
                 }
                 return true
             }
         })
+        injectedHosts.add(WeakReference(host))
+        // 注入时面板已展开（如面板开着时 SystemUI 重启）：立即按当前面板状态切原生显隐。
+        if (panelExpanded) runCatching { applyHostVisibility(host, true) }
         trioViews.add(WeakReference(view))
         module.log(
             Log.INFO,

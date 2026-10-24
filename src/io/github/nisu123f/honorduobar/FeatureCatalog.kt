@@ -17,6 +17,9 @@ object FeatureCatalog {
     const val KEY_SYSTEMUI_TRIO_ANTI_BURNIN = "systemui.trio_anti_burnin"
     /** 灵动胶囊展开时保留蓝牙等状态图标（不让原生按胶囊边界把图标淡出）。 */
     const val KEY_SYSTEMUI_TRIO_KEEP_ICONS = "systemui.trio_keep_icons"
+
+    /** 下拉面板（通知/控制中心）展开时切回原生信号/电池图标，面板收起后恢复三合一。 */
+    const val KEY_SYSTEMUI_PANEL_NATIVE_ICONS = "systemui.panel_native_icons"
     /** 三合一图标尺寸（dp，18–26）。 */
     const val KEY_SYSTEMUI_TRIO_SIZE = "systemui.trio_size"
 
@@ -46,6 +49,9 @@ object FeatureCatalog {
 
     /** 隐藏通知中心大时间右侧的铃铛按钮（通知管理入口）。 */
     const val KEY_SYSTEMUI_HIDE_NOTIF_BELL = "systemui.hide_notif_bell"
+
+    /** 全局诊断日志：向 LSPosed 模块日志输出功能运行状态（默认关，排查问题时再开）。 */
+    const val KEY_DEBUG_LOG = "debug.verbose_log"
 
     /** 宿主包名（本模块唯一作用域）。 */
     const val HOST_PACKAGE = "com.android.systemui"
@@ -99,6 +105,13 @@ object FeatureCatalog {
             dependsOn = KEY_SYSTEMUI_TRIO,
         ),
         Feature(
+            KEY_SYSTEMUI_PANEL_NATIVE_ICONS,
+            "下拉面板：显示原生图标",
+            "下拉通知中心或控制中心时，顶部状态栏行切回原生 Wi-Fi/信号/电池图标（不再三合一）；面板收起后恢复三合一字形。改动需重启系统界面生效。",
+            defaultEnabled = false,
+            dependsOn = KEY_SYSTEMUI_TRIO,
+        ),
+        Feature(
             KEY_SYSTEMUI_CAPSULE_NO_SCALE,
             "灵动胶囊：状态栏不缩放",
             "消息上岛常驻时，原生会把状态栏图标微缩（约 88%）给胶囊腾位置。开启后等上岛缩小动画播完，立即触发系统原生回弹动画恢复原始大小；点击展开/关闭胶囊的动画保持原生不变。改动需重启系统界面生效。",
@@ -121,6 +134,12 @@ object FeatureCatalog {
             KEY_SYSTEMUI_HIDE_CC_POWER,
             "隐藏控制中心关机按钮",
             "把控制中心（状态栏右侧下滑面板）右上角的电源按钮设为 GONE；关机仍可通过长按电源键触发。",
+            defaultEnabled = false,
+        ),
+        Feature(
+            KEY_DEBUG_LOG,
+            "诊断日志",
+            "向 LSPosed 模块日志输出功能运行状态（面板展开/收起切换、收起兜底轮询等），用于排查问题；日常建议关闭。翻转即时生效（启动挂载信息除外）。",
             defaultEnabled = false,
         ),
     )
