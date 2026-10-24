@@ -21,6 +21,12 @@ object FeatureCatalog {
     const val KEY_SYSTEMUI_TRIO_SIZE = "systemui.trio_size"
 
     /**
+     * 三合一蓝牙耳机电量（int 三态）：0=关闭，1=圆弧，2=数字。
+     * 旧版同键 boolean 会被 getInt 读到 ClassCastException → runCatching 回默认 0（关闭），自然迁移。
+     */
+    const val KEY_SYSTEMUI_TRIO_BT_BATTERY = "systemui.trio_bt_battery"
+
+    /**
      * 旧版「隐藏状态栏时钟」布尔键（v1.0.8 及以前）。
      * 保留仅用于迁移：远端/本地只有此键时，true 折算为 clock_mode=1（隐藏）。
      */
@@ -31,6 +37,9 @@ object FeatureCatalog {
 
     /** 隐藏控制中心关机按钮（右上角电源图标）。 */
     const val KEY_SYSTEMUI_HIDE_CC_POWER = "systemui.hide_cc_power"
+
+    /** 灵动胶囊启用时禁用状态栏缩放（HnPhoneStatusBarAnimController.getScaleValue 恒返回 1.0f，覆盖 0.4f/0.88f 两条缩放路径）。 */
+    const val KEY_SYSTEMUI_CAPSULE_NO_SCALE = "systemui.capsule_no_scale"
 
     /** 通知中心顶部日期行追加农历（「·九月初四」后缀）。 */
     const val KEY_SYSTEMUI_SHADE_LUNAR = "systemui.shade_lunar"
@@ -90,6 +99,12 @@ object FeatureCatalog {
             dependsOn = KEY_SYSTEMUI_TRIO,
         ),
         Feature(
+            KEY_SYSTEMUI_CAPSULE_NO_SCALE,
+            "灵动胶囊：状态栏不缩放",
+            "灵动胶囊展开/收起时原生会对状态栏做缩放动画（明显缩到 40%，或微缩到 88%）。开启后 hook HnPhoneStatusBarAnimController.getScaleValue 恒返回 1.0f，两条缩放路径同时禁用，状态栏始终按原始尺寸显示。",
+            defaultEnabled = false,
+        ),
+        Feature(
             KEY_SYSTEMUI_HIDE_NOTIF_BELL,
             "隐藏通知中心铃铛按钮",
             "隐藏通知中心大时间右侧的铃铛图标（通知管理入口，仍可从系统设置进入）；隐藏后日期行可获得更多显示宽度。",
@@ -119,6 +134,9 @@ object FeatureCatalog {
 
     /** 时钟模式默认值：不修改。 */
     fun defaultClockMode(): Int = 0
+
+    /** 蓝牙耳机电量默认值：关闭。 */
+    fun defaultBtBatteryMode(): Int = 0
 
     /** 尺寸值归一：0/1/2 是旧的三档索引，新值直接就是 dp。 */
     fun resolveTrioSize(raw: Int): Int = when (raw) {

@@ -19,17 +19,16 @@ import java.util.concurrent.ConcurrentHashMap
  * - Compose 的 AndroidView 对 GONE 的 View 测成 0×0，故置 GONE 即消失且不占宽
  *   （日期行随之获得更多宽度，与农历功能互补）。
  *
- * 防线（ControlCenterFeature 同款思路）：
- *   1. hook NotifMgeBtn.setVisibility(int) —— 宿主所有非 GONE 的显示尝试都压回 GONE；
- *   2. hook NotifMgeBtn.onAttachedToWindow() —— attach 时机置 GONE 并挂 OnPreDrawListener 每帧重申，
- *      防宿主在面板刷新流程里把按钮重新置回可见。
+ * 防线：只 hook `NotifMgeBtn.onAttachedToWindow()`：attach 时机置 GONE + OnPreDraw 每帧重申。
+ * 不再 hook `setVisibility(int)`：继承链（NotifMgeBtn→HnBlurImageView→HnBlurRoundButton
+ * →AppCompatImageView→ImageView→View）均未覆写此方法，按子类名挂载必然失败。
+ * OnPreDraw 每帧重申足以覆盖宿主回写 VISIBLE 的场景：绘制前被改回 GONE，用户看不到中间态。
  */
 object NotifBellFeature {
 
     private const val HOST_PACKAGE = "com.android.systemui"
     private const val CLS_BTN =
         "com.android.systemui.statusbar.notification.panelheader.NotifMgeBtn"
-    private const val ID_SET_VISIBILITY = "systemui:notifbell.setVisibility"
     private const val ID_ON_ATTACHED = "systemui:notifbell.onAttachedToWindow"
     private const val JUDGE_PREFIX = "SystemUiHook·NotifBell"
 
@@ -51,15 +50,6 @@ object NotifBellFeature {
         val pending = listOf(
             MountEngine.SimpleTask(
                 className = CLS_BTN,
-                methodName = "setVisibility",
-                paramCount = 1,
-                returnType = "void",
-                id = ID_SET_VISIBILITY,
-                description = "NotifBell 拦截 NotifMgeBtn.setVisibility：非 GONE → GONE",
-                feature = FeatureCatalog.KEY_SYSTEMUI_HIDE_NOTIF_BELL,
-            ),
-            MountEngine.SimpleTask(
-                className = CLS_BTN,
                 methodName = "onAttachedToWindow",
                 paramCount = 0,
                 returnType = "void",
@@ -78,13 +68,6 @@ object NotifBellFeature {
         loader: ClassLoader,
     ): MountEngine.Result = session.mount(task, module, loader, XposedInterface.Hooker { chain ->
         when (task.id) {
-            ID_SET_VISIBILITY -> {
-                chain.proceed()
-                (chain.thisObject as? View)?.let { v ->
-                    if (v.visibility != View.GONE) v.visibility = View.GONE
-                }
-                null
-            }
             ID_ON_ATTACHED -> {
                 chain.proceed()
                 (chain.thisObject as? View)?.let { hideAndTrack(it, module) }

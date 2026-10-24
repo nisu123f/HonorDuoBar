@@ -60,6 +60,7 @@ object FeatureStore {
             FeatureCatalog.features.forEach { editor.putBoolean(it.key, isEnabled(it.key)) }
             editor.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_SIZE, trioSize())
             editor.putInt(FeatureCatalog.KEY_SYSTEMUI_CLOCK_MODE, clockMode())
+            editor.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_BT_BATTERY, btBatteryMode())
             editor.apply()
             true
         }.getOrElse { t ->
@@ -114,7 +115,32 @@ object FeatureStore {
             editor.apply()
             true
         }.getOrElse { t ->
-            Log.w(TAG, "远端时钟模式下发失败", t)
+            Log.w(TAG, "远端时钟模式写入失败", t)
+            false
+        }
+    }
+
+    /** 蓝牙耳机电量模式：0=关闭，1=圆弧，2=数字。 */
+    fun btBatteryMode(): Int {
+        val p = prefs ?: return FeatureCatalog.defaultBtBatteryMode()
+        return runCatching {
+            p.getInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_BT_BATTERY, FeatureCatalog.defaultBtBatteryMode())
+        }.getOrDefault(FeatureCatalog.defaultBtBatteryMode()).coerceIn(0, 2)
+    }
+
+    fun setBtBatteryMode(value: Int): Boolean {
+        prefs?.edit()?.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_BT_BATTERY, value)?.apply()
+        val service = FrameworkState.current() ?: run {
+            Log.w(TAG, "LSPosed 未连接，蓝牙电量模式只写入本地")
+            return false
+        }
+        return runCatching {
+            service.getRemotePreferences(FeatureCatalog.REMOTE_GROUP).edit()
+                .putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_BT_BATTERY, value)
+                .apply()
+            true
+        }.getOrElse { t ->
+            Log.w(TAG, "远端蓝牙电量模式写入失败", t)
             false
         }
     }

@@ -55,11 +55,13 @@ object TrioFeature {
     private const val HOST_PACKAGE = "com.android.systemui"
     private const val CLS_SYSTEM_ICONS = "com.android.systemui.statusbar.HwSystemIcons"
     private const val CLS_STATUSBAR_CONTENTS = "com.android.systemui.statusbar.HwStatusbarContents"
+    private const val CLS_BT_POLICY = "com.android.systemui.statusbar.phone.HwPhoneStatusBarPolicy"
     private const val METHOD_FINISH_INFLATE = "onFinishInflate"
     private const val METHOD_REFRESH_TINT = "refreshTint"
     private const val METHOD_LAYOUT = "onLayout"
     private const val METHOD_MEASURE = "onMeasure"
     private const val METHOD_UPDATE_ICONS_ALPHA = "updateIconsAlpha"
+    private const val METHOD_UPDATE_BLUETOOTH = "updateBluetooth"
 
     private const val TAG_VIEW = "hh_trio_view"
     /** 三合一开启时要隐藏的原生件：整组 + 组内单件兜底（id 不存在会自动跳过）。 */
@@ -79,6 +81,36 @@ object TrioFeature {
     private const val ID_LAYOUT = "systemui:trio.systemIcons.onLayout"
     private const val ID_MEASURE = "systemui:trio.systemIcons.onMeasure"
     private const val ID_UPDATE_ALPHA = "systemui:trio.systemIcons.updateIconsAlpha"
+    private const val ID_BT_BATTERY = "systemui:trio.hwPhoneStatusBarPolicy.updateBluetooth"
+    private const val ID_CAPSULE_NO_SCALE = "systemui:trio.hwNotchUtils.getScaleValue"
+
+    // HwNotchUtils.getScaleValue() 是 PUBLIC STATIC、27 条指令，dex 里有 30+ 处 invoke-static，
+    // R8 未内联。返回 0.88f（灵动胶囊常驻时布局坐标缩放系数）或 1.0f。hook 它恒返回 1.0f 即可
+    // 覆盖所有 30+ 处布局坐标计算（HwSystemIcons/HwStatusbarContents/HnStatusBarPullAnimImpl 等）。
+    private const val CLS_NOTCH_UTILS = "com.android.systemui.utils.HwNotchUtils"
+    private const val METHOD_GET_SCALE_VALUE = "getScaleValue"
+
+    /**
+     * 蓝牙耳机电量缓存。
+     *
+     * 数据源：HwBluetoothControllerImpl.mBluetoothBatteryLevel（原生由 mBluetoothBatteryReceiver
+     * 监听 ACTION_BATTERY_LEVEL_CHANGED 维护）。
+     *
+     * 为何 hook HwPhoneStatusBarPolicy.updateBluetooth 而不是 getBluetoothBatteryLevel：
+     * 后者是 3 行的 public final 方法，R8 几乎必然内联，且 LSPosed hook final 短方法在
+     * ART 上有 deopt 兼容问题，实测会触发 SystemUI 原生崩溃（非 Java 异常，runCatching 拦不住）。
+     * updateBluetooth 方法体长（几百行）不会被内联，虽然也是 final，但 hook 稳定。
+     * proceed 后从 thisObject.mBluetooth 反射读 mBluetoothBatteryLevel 即可。
+     */
+    @Volatile private var cachedBtBattery: Int = -1
+
+    /** 缓存反射字段（getDeclaredField 是低频调用但仍要避免每次重建）。 */
+    @Volatile private var btPolicyBluetoothField: Field? = null
+    @Volatile private var btControllerBatteryLevelField: Field? = null
+    @Volatile private var btPolicyIconControllerField: Field? = null
+
+    /** 主线程 Handler：蓝牙 hook 回调可能在 binder 线程，View 操作必须 post 回主线程。 */
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     /** 所有已注入的三合一 View（折叠栏/锁屏/覆盖层各一个实例；仅主线程读写）。 */
     private val trioViews = ArrayList<WeakReference<TrioView>>()
@@ -150,48 +182,86 @@ object TrioFeature {
             param.applicationInfo?.sourceDir,
             FeatureCatalog.baselineVersionOf(HOST_PACKAGE),
         )
-        val pending = listOf(
-            MountEngine.SimpleTask(
-                className = CLS_SYSTEM_ICONS,
-                methodName = METHOD_FINISH_INFLATE,
-                paramCount = 0,
-                returnType = "void",
-                id = ID_INFLATE,
-                description = "U9 三合一注入（HwSystemIcons.onFinishInflate 后插自绘 View，隐藏原生信号组/电池）",
-            ),
-            MountEngine.SimpleTask(
-                className = CLS_SYSTEM_ICONS,
-                methodName = METHOD_MEASURE,
-                paramCount = 2,
-                returnType = "void",
-                id = ID_MEASURE,
-                description = "U9 三合一防闪（HwSystemIcons.onMeasure 前把原生件压回 GONE，排版不再含电池宽度）",
-            ),
-            MountEngine.SimpleTask(
-                className = CLS_SYSTEM_ICONS,
-                methodName = METHOD_LAYOUT,
-                paramCount = 5,
-                returnType = "void",
-                id = ID_LAYOUT,
-                description = "U9 三合一隐藏复位（HwSystemIcons.onLayout 后重申原生信号组/电池 GONE）",
-            ),
-            MountEngine.SimpleTask(
-                className = CLS_SYSTEM_ICONS,
-                methodName = METHOD_UPDATE_ICONS_ALPHA,
-                paramCount = 0,
-                returnType = "void",
-                id = ID_UPDATE_ALPHA,
-                description = "U9 三合一胶囊避让（HwSystemIcons.updateIconsAlpha 后恢复状态图标 alpha，胶囊不再挤掉蓝牙等图标）",
-            ),
-            MountEngine.SimpleTask(
-                className = CLS_STATUSBAR_CONTENTS,
-                methodName = METHOD_REFRESH_TINT,
-                paramCount = 0,
-                returnType = "void",
-                id = ID_REFRESH_TINT,
-                description = "U9 三合一反色（HwStatusbarContents.refreshTint 后按电池字段重采样重绘，HonorDuo 同源）",
-            ),
-        )
+        val pending = buildList {
+            add(
+                MountEngine.SimpleTask(
+                    className = CLS_SYSTEM_ICONS,
+                    methodName = METHOD_FINISH_INFLATE,
+                    paramCount = 0,
+                    returnType = "void",
+                    id = ID_INFLATE,
+                    description = "U9 三合一注入（HwSystemIcons.onFinishInflate 后插自绘 View，隐藏原生信号组/电池）",
+                ),
+            )
+            add(
+                MountEngine.SimpleTask(
+                    className = CLS_SYSTEM_ICONS,
+                    methodName = METHOD_MEASURE,
+                    paramCount = 2,
+                    returnType = "void",
+                    id = ID_MEASURE,
+                    description = "U9 三合一防闪（HwSystemIcons.onMeasure 前把原生件压回 GONE，排版不再含电池宽度）",
+                ),
+            )
+            add(
+                MountEngine.SimpleTask(
+                    className = CLS_SYSTEM_ICONS,
+                    methodName = METHOD_LAYOUT,
+                    paramCount = 5,
+                    returnType = "void",
+                    id = ID_LAYOUT,
+                    description = "U9 三合一隐藏复位（HwSystemIcons.onLayout 后重申原生信号组/电池 GONE）",
+                ),
+            )
+            add(
+                MountEngine.SimpleTask(
+                    className = CLS_SYSTEM_ICONS,
+                    methodName = METHOD_UPDATE_ICONS_ALPHA,
+                    paramCount = 0,
+                    returnType = "void",
+                    id = ID_UPDATE_ALPHA,
+                    description = "U9 三合一胶囊避让（HwSystemIcons.updateIconsAlpha 后恢复状态图标 alpha，胶囊不再挤掉蓝牙等图标）",
+                ),
+            )
+            add(
+                MountEngine.SimpleTask(
+                    className = CLS_STATUSBAR_CONTENTS,
+                    methodName = METHOD_REFRESH_TINT,
+                    paramCount = 0,
+                    returnType = "void",
+                    id = ID_REFRESH_TINT,
+                    description = "U9 三合一反色（HwStatusbarContents.refreshTint 后按电池字段重采样重绘，HonorDuo 同源）",
+                ),
+            )
+            // 蓝牙耳机电量 hook 由模式独立控制挂载：模式=关闭（默认）时不挂，
+            // 避免挂载/回调异常穿透 SystemUI 触发 LSPosed 安全模式。
+            // 模式切换需重启 SystemUI 生效（与其他 hook 一致，挂载时机是 onPackageLoaded 一次性）。
+            if (RemoteConfig.int(FeatureCatalog.KEY_SYSTEMUI_TRIO_BT_BATTERY, 0).coerceIn(0, 2) > 0) {
+                add(
+                    MountEngine.SimpleTask(
+                        className = CLS_BT_POLICY,
+                        methodName = METHOD_UPDATE_BLUETOOTH,
+                        paramCount = 0,
+                        returnType = "void",
+                        id = ID_BT_BATTERY,
+                        description = "U9 三合一蓝牙耳机电量（hook HwPhoneStatusBarPolicy.updateBluetooth，proceed 后反射读 HwBluetoothControllerImpl.mBluetoothBatteryLevel）",
+                    ),
+                )
+            }
+            // 灵动胶囊禁用状态栏缩放：双 hook 覆盖布局坐标与动画两条路径。
+            if (RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_CAPSULE_NO_SCALE)) {
+                add(
+                    MountEngine.SimpleTask(
+                        className = CLS_NOTCH_UTILS,
+                        methodName = METHOD_GET_SCALE_VALUE,
+                        paramCount = 0,
+                        returnType = "float",
+                        id = ID_CAPSULE_NO_SCALE,
+                        description = "U9 灵动胶囊状态栏不缩放（hook HwNotchUtils.getScaleValue 恒返回 1.0f）",
+                    ),
+                )
+            }
+        }
         session.attemptMount(pending, module, loader) { task -> mountOne(session, task, module, loader) }
     }
 
@@ -202,6 +272,10 @@ object TrioFeature {
         loader: ClassLoader,
     ): MountEngine.Result = session.mount(task, module, loader) { chain ->
         when (task.id) {
+            ID_CAPSULE_NO_SCALE -> {
+                // hook HwNotchUtils.getScaleValue() 恒返回 1.0f（布局坐标路径）
+                1.0f
+            }
             ID_MEASURE -> {
                 // 防闪根修：必须在 measure 之前压回 GONE——宿主电量/信号更新把原生件置回
                 // VISIBLE 后，若 measure 已按 VISIBLE 排版，再 GONE 就会触发「含电池宽度→
@@ -221,6 +295,11 @@ object TrioFeature {
                 chain.proceed()
                 (chain.thisObject as? ViewGroup)?.let { host ->
                     runCatching { assertHidden(host) }
+                    // 灵动胶囊不缩放：onLayout 时强制重置子树 scaleX/scaleY = 1.0f。
+                    // 动画突兀但能用（常驻时图标恢复正常大小）。
+                    if (RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_CAPSULE_NO_SCALE)) {
+                        runCatching { resetSubtreeScale(host) }
+                    }
                 }
             }
             ID_UPDATE_ALPHA -> {
@@ -237,9 +316,40 @@ object TrioFeature {
                 chain.proceed()
                 invalidateAllTrio()
             }
+            ID_BT_BATTERY -> {
+                // proceed 后 thisObject.mBluetooth 已是当前 HwBluetoothControllerImpl 实例，
+                // 反射读 mBluetoothBatteryLevel 缓存；整条链路 runCatching，任何异常不穿透 SystemUI。
+                chain.proceed()
+                runCatching {
+                    val policy = chain.thisObject ?: return@runCatching
+                    val policyField = btPolicyBluetoothField ?: findField(policy.javaClass, "mBluetooth")
+                        ?.also { btPolicyBluetoothField = it } ?: return@runCatching
+                    val controller = policyField.get(policy) ?: return@runCatching
+                    val levelField = btControllerBatteryLevelField
+                        ?: findField(controller.javaClass, "mBluetoothBatteryLevel")
+                            ?.also { btControllerBatteryLevelField = it } ?: return@runCatching
+                    val v = runCatching { levelField.getInt(controller) }.getOrDefault(-1)
+                    if (v != cachedBtBattery) {
+                        cachedBtBattery = v
+                        mainHandler.post { invalidateAllTrio() }
+                    }
+                    // 连耳机且电量可读：通过 StatusBarIconController 压制原生蓝牙图标，
+                    // 避免与三合一里的耳机电量重复显示。断开/电量未知时 proceed 原生结果生效。
+                    if (v in 0..100) {
+                        val iconCtrlField = btPolicyIconControllerField
+                            ?: findField(policy.javaClass, "mIconController")
+                                ?.also { btPolicyIconControllerField = it } ?: return@runCatching
+                        val iconCtrl = iconCtrlField.get(policy) ?: return@runCatching
+                        runCatching {
+                            iconCtrl.javaClass
+                                .getMethod("setIconVisibility", String::class.java, Boolean::class.javaPrimitiveType)
+                                .invoke(iconCtrl, "bluetooth", false)
+                        }
+                    }
+                }
+            }
             else -> chain.proceed()
         }
-        null
     }
 
     /** id 解析缓存：onMeasure 是高频回调，getIdentifier 字符串查表不能每次都跑。 */
@@ -275,6 +385,28 @@ object TrioFeature {
         for (id in ids) {
             host.findViewById<View>(id)?.let { v ->
                 if (v.visibility != View.GONE) v.visibility = View.GONE
+            }
+        }
+    }
+
+    /**
+     * 递归检测 View 树中 scaleX/scaleY != 1.0f 的节点，对其做平滑动画过渡到 1.0f。
+     * 灵动胶囊的缩放通过 ObjectAnimator.ofFloat(view, "scaleX", ...) 直写 View 属性，
+     * 这里用 ViewPropertyAnimator 反向动画回 1.0f，避免突兀跳变。
+     * 只对顶层检测到的第一个缩放节点做动画（子 View 跟随父容器），避免全树动画开销。
+     */
+    private fun resetSubtreeScale(view: View) {
+        if (view.scaleX != 1.0f || view.scaleY != 1.0f) {
+            view.animate()
+                .scaleX(1.0f)
+                .scaleY(1.0f)
+                .setDuration(300)
+                .start()
+            return  // 子 View 跟随父容器缩放，无需递归
+        }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                view.getChildAt(i)?.let { resetSubtreeScale(it) }
             }
         }
     }
@@ -316,6 +448,7 @@ object TrioFeature {
             showType = true,
             levelColor = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_LEVEL_COLOR),
             antiBurnIn = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_ANTI_BURNIN),
+            btBatteryMode = RemoteConfig.int(FeatureCatalog.KEY_SYSTEMUI_TRIO_BT_BATTERY, 0).coerceIn(0, 2),
         )
         val sizeDp = FeatureCatalog.resolveTrioSize(
             RemoteConfig.int(
@@ -371,6 +504,7 @@ object TrioFeature {
         val showType: Boolean,
         val levelColor: Boolean,
         val antiBurnIn: Boolean,
+        val btBatteryMode: Int,
     )
 
     /** 自绘字形。所有几何量都在 120×120 设计空间内，绘制前统一缩放。 */
@@ -387,7 +521,14 @@ object TrioFeature {
             strokeWidth = 8f
             strokeCap = Paint.Cap.ROUND
         }
-        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        private val signalPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+
+    /** 蓝牙电量弧线画笔：STROKE + ROUND 端点，宽度与 Wi-Fi 单条弧线（ringPaint）一致。 */
+    private val btLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 8f
+        strokeCap = Paint.Cap.ROUND
+    }
         private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textAlign = Paint.Align.CENTER
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
@@ -486,6 +627,8 @@ object TrioFeature {
         private var airplaneMode = false
         private var mobileLevels = IntArray(0)
         private var netType = ""
+        /** 蓝牙耳机电量（0–100）；开关关 / 无耳机连接 / 设备不上报 → -1。 */
+        private var bluetoothBattery = -1
 
         init {
             isClickable = false
@@ -562,6 +705,11 @@ object TrioFeature {
                     0,
                 ) == 1
             }.getOrDefault(false)
+
+            // 蓝牙耳机电量：搭车原生 HwBluetoothControllerImpl 缓存（ID_BT_BATTERY hook 写入
+            // cachedBtBattery）；模式=关闭时保持 -1 走原信号点分支。原生只在蓝牙状态变化时刷新，
+            // 连接/断开/电量上报都会触发，无需自己轮询 BluetoothManager。
+            bluetoothBattery = if (config.btBatteryMode > 0) cachedBtBattery else -1
 
             val sm = context.getSystemService(SubscriptionManager::class.java)
             val tm = context.getSystemService(TelephonyManager::class.java)
@@ -670,8 +818,8 @@ object TrioFeature {
 
         private fun drawTop(canvas: Canvas, fg: Int) {
             if (airplaneMode) {
-                fillPaint.color = fg
-                canvas.drawPath(plane, fillPaint)
+                signalPaint.color = fg
+                canvas.drawPath(plane, signalPaint)
                 return
             }
             if (config.showWifi && wifiLevel > 0) {
@@ -687,8 +835,8 @@ object TrioFeature {
                 if (wifiLevel >= 2) {
                     arc(canvas, W_CX, W2_CY, W2_R, W2_START, W2_SWEEP)
                 }
-                fillPaint.color = fg
-                canvas.drawCircle(W_CX, W_DOT_Y, W_DOT_R, fillPaint)
+                signalPaint.color = fg
+                canvas.drawCircle(W_CX, W_DOT_Y, W_DOT_R, signalPaint)
                 canvas.restoreToCount(save)
                 return
             }
@@ -700,6 +848,29 @@ object TrioFeature {
         }
 
         private fun drawMobile(canvas: Canvas, fg: Int) {
+            // 蓝牙耳机电量替换底部信号点，由 config.btBatteryMode 控制：
+            // 0=关闭：走下方信号点分支；1=圆弧：沿信号点轨迹画弧线，与电池环同心，半径 48，跨 65°→115°，线宽 8（与 Wi-Fi 单条弧线一致）；
+            // 2=数字：底部居中 24 号粗体百分比，与环心电量数字同风格。底部 6 点钟是环缺口不会撞环。
+            val bt = bluetoothBattery
+            if (config.btBatteryMode > 0 && bt in 0..100) {
+                if (config.btBatteryMode == 2) {
+                    textPaint.color = fg
+                    textPaint.textSize = 24f
+                    textPaint.typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+                    drawTextCentred(canvas, bt.toString(), 60f, 108f)
+                } else {
+                    arcRect.set(B_CX - BT_R, B_CY - BT_R, B_CX + BT_R, B_CY + BT_R)
+                    btLinePaint.color = fg
+                    btLinePaint.alpha = TRACK_ALPHA
+                    canvas.drawArc(arcRect, BT_ARC_START, BT_ARC_SWEEP, false, btLinePaint)
+                    if (bt > 0) {
+                        val progress = BT_ARC_SWEEP * bt / 100f
+                        btLinePaint.alpha = 255
+                        canvas.drawArc(arcRect, BT_ARC_START + BT_ARC_SWEEP - progress, progress, false, btLinePaint)
+                    }
+                }
+                return
+            }
             val levels = mobileLevels
             if (!config.showDots || levels.isEmpty()) return
             // 只画一排：默认数据卡。双卡同时画两排在荣耀状态栏高度里会挤到电量数字，
@@ -707,22 +878,22 @@ object TrioFeature {
             // 点位沿用原项目：沿环底缺口排布，中间两点略低，是「穿在环上的珠子」。
             val lit = levels[0].coerceIn(0, 4)
             for (i in DOT_X.indices) {
-                fillPaint.color = if (i < lit) fg else withAlpha(fg, TRACK_ALPHA)
-                canvas.drawCircle(DOT_X[i], DOT_Y[i], DOT_R, fillPaint)
+                signalPaint.color = if (i < lit) fg else withAlpha(fg, TRACK_ALPHA)
+                canvas.drawCircle(DOT_X[i], DOT_Y[i], DOT_R, signalPaint)
             }
         }
 
         private fun drawCentre(canvas: Canvas, fg: Int) {
             if (charging) {
-                fillPaint.color = COLOR_CHARGING
+                signalPaint.color = COLOR_CHARGING
                 if (fullCharging) {
                     // 充满：闪电换成「～」（对齐原生充满图标的波浪语义）。
-                    textPaint.color = fillPaint.color
+                    textPaint.color = signalPaint.color
                     textPaint.textSize = 44f
                     textPaint.typeface = Typeface.create("sans-serif", Typeface.BOLD)
                     drawTextCentred(canvas, "~", 60f, 66f)
                 } else {
-                    canvas.drawPath(bolt, fillPaint)
+                    canvas.drawPath(bolt, signalPaint)
                 }
                 return
             }
@@ -790,6 +961,11 @@ object TrioFeature {
             const val B_R = 51.5f
             const val RING_STROKE = 14f
             const val TRACK_ALPHA = 56
+
+            /** 蓝牙电量弧线：与电池环同心，半径 48 贴合原 4 信号点轨迹，扫角跨 65°→115°。 */
+            const val BT_R = 48f
+            const val BT_ARC_START = 65f
+            const val BT_ARC_SWEEP = 50f
             const val DOT_R = 5.5f
             val DOT_X = floatArrayOf(39.5f, 53f, 67f, 80.5f)
             val DOT_Y = floatArrayOf(104.8f, 110.5f, 110.5f, 104.8f)

@@ -35,6 +35,7 @@ class MainActivity : Activity() {
     private lateinit var sizeValue: TextView
     private lateinit var sizeRow: LinearLayout
     private lateinit var clockValue: TextView
+    private lateinit var btStyleValue: TextView
     private val switches = HashMap<String, Switch>()
     private val listeners = ArrayList<() -> Unit>()
 
@@ -56,7 +57,7 @@ class MainActivity : Activity() {
 
         root.addView(buildStatusCard())
         root.addView(sectionTitle("状态栏"))
-        root.addView(buildCard(featureRows { it.key !in notifCenterKeys && it.key !in controlCenterKeys } + buildClockRow() + buildSizeRow()))
+        root.addView(buildCard(featureRows { it.key !in notifCenterKeys && it.key !in controlCenterKeys } + buildClockRow() + buildSizeRow() + buildBtStyleRow()))
         root.addView(sectionTitle("通知中心"))
         root.addView(buildCard(featureRows { it.key in notifCenterKeys }))
         root.addView(sectionTitle("控制中心"))
@@ -247,6 +248,68 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun buildBtStyleRow(): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, dp(12))
+            setOnClickListener { showBtStyleDialog() }
+        }
+        val texts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        texts.addView(TextView(this).apply {
+            text = "蓝牙耳机电量"
+            setTextColor(colorText)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        })
+        texts.addView(TextView(this).apply {
+            text = "三合一底部信号点在蓝牙耳机连接时的替换样式：关闭保持原信号点；圆弧沿信号点轨迹画一段弧线；数字直接显示百分比。同时隐藏原生蓝牙图标避免重复。需先开启「状态栏三合一」，改动后需重启系统界面并重连蓝牙耳机生效。"
+            setTextColor(colorSub)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setPadding(0, dp(3), dp(12), 0)
+            setLineSpacing(dp(2).toFloat(), 1f)
+        })
+        row.addView(texts)
+        btStyleValue = TextView(this).apply {
+            setTextColor(colorAccent)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        }
+        row.addView(btStyleValue)
+        updateBtStyleText()
+        return row
+    }
+
+    private fun btStyleLabel(mode: Int): String = when (mode) {
+        1 -> "圆弧"
+        2 -> "数字"
+        else -> "关闭"
+    }
+
+    private fun updateBtStyleText() {
+        btStyleValue.text = "${btStyleLabel(FeatureStore.btBatteryMode())} ›"
+    }
+
+    private fun showBtStyleDialog() {
+        if (switches[FeatureCatalog.KEY_SYSTEMUI_TRIO]?.isChecked != true) {
+            toast("请先开启「状态栏三合一」")
+            return
+        }
+        val labels = arrayOf("关闭", "圆弧", "数字")
+        val current = FeatureStore.btBatteryMode().coerceIn(0, labels.size - 1)
+        AlertDialog.Builder(this)
+            .setTitle("蓝牙耳机电量")
+            .setSingleChoiceItems(labels, current) { dialog, which ->
+                val pushed = FeatureStore.setBtBatteryMode(which)
+                updateBtStyleText()
+                if (!pushed) toast("已保存到本地，但 LSPosed 未连接，本次改动不会下发")
+                dialog.dismiss()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
     private fun buildSizeRow(): View {
         sizeRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -397,6 +460,7 @@ class MainActivity : Activity() {
             switches[feature.key]?.isChecked = FeatureStore.isEnabled(feature.key)
         }
         if (this::clockValue.isInitialized) updateClockText()
+        if (this::btStyleValue.isInitialized) updateBtStyleText()
         renderDependency()
     }
 
