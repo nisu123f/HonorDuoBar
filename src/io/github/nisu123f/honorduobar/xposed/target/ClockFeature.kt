@@ -104,11 +104,11 @@ object ClockFeature {
         session.attemptMount(pending, module, loader) { task -> mountOne(session, task, module, loader) }
     }
 
-    /** 读模式；远端只有旧布尔 hide_clock 键（老版本宿主写入）时折算为 隐藏/不修改。 */
+    /** 读时钟模式（0=不修改，1=隐藏，2=显秒）。 */
     private fun readMode(): Int {
         val raw = RemoteConfig.int(FeatureCatalog.KEY_SYSTEMUI_CLOCK_MODE, Int.MIN_VALUE)
         if (raw != Int.MIN_VALUE) return raw.coerceIn(MODE_UNTOUCHED, MODE_SECONDS)
-        return if (RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_HIDE_CLOCK)) MODE_HIDE else MODE_UNTOUCHED
+        return MODE_UNTOUCHED
     }
 
     private fun mountOne(

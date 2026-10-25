@@ -93,15 +93,12 @@ object FeatureStore {
         }
     }
 
-    /** 时钟模式：0=不修改，1=隐藏，2=显秒；本地无新键时折算旧布尔 hide_clock。 */
+    /** 时钟模式：0=不修改，1=隐藏，2=显秒。 */
     fun clockMode(): Int {
-        val p = prefs
-        if (p != null && p.contains(FeatureCatalog.KEY_SYSTEMUI_CLOCK_MODE)) {
-            return runCatching {
-                p.getInt(FeatureCatalog.KEY_SYSTEMUI_CLOCK_MODE, FeatureCatalog.defaultClockMode())
-            }.getOrDefault(FeatureCatalog.defaultClockMode())
-        }
-        return if (isEnabled(FeatureCatalog.KEY_SYSTEMUI_HIDE_CLOCK)) 1 else FeatureCatalog.defaultClockMode()
+        val p = prefs ?: return FeatureCatalog.defaultClockMode()
+        return runCatching {
+            p.getInt(FeatureCatalog.KEY_SYSTEMUI_CLOCK_MODE, FeatureCatalog.defaultClockMode())
+        }.getOrDefault(FeatureCatalog.defaultClockMode())
     }
 
     fun setClockMode(value: Int): Boolean {

@@ -29,12 +29,6 @@ object FeatureCatalog {
      */
     const val KEY_SYSTEMUI_TRIO_BT_BATTERY = "systemui.trio_bt_battery"
 
-    /**
-     * 旧版「隐藏状态栏时钟」布尔键（v1.0.8 及以前）。
-     * 保留仅用于迁移：远端/本地只有此键时，true 折算为 clock_mode=1（隐藏）。
-     */
-    const val KEY_SYSTEMUI_HIDE_CLOCK = "systemui.hide_clock"
-
     /** 状态栏时钟模式（int）：0=不修改，1=隐藏，2=显秒。 */
     const val KEY_SYSTEMUI_CLOCK_MODE = "systemui.clock_mode"
 
