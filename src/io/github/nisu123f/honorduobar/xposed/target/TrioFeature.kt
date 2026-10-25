@@ -137,6 +137,13 @@ object TrioFeature {
     /** 蓝牙电量播种进行中（防重入；结果回调/断开时复位）。 */
     @Volatile private var btSeeding = false
 
+    /** 粘滞电量图标清理进行中（防重入；清理后重调 updateBluetooth 会再过一次本钩子）。 */
+    @Volatile private var btClearing = false
+
+    /** 原生电量图标使能粘滞位（mIsBluetoothEarBattery）与其 setter 的反射缓存。 */
+    @Volatile private var btEarBatteryFlagField: Field? = null
+    @Volatile private var btBatteryEnableMethod: java.lang.reflect.Method? = null
+
     // ---- 原生蓝牙图标单件隐藏（与信号/Wi-Fi 同一 View 显隐体系） ----
     // 蓝牙图标与闹钟等混在 statusIcons 组内，不能整组 GONE；它是 StatusBarIconController
     // 动态 addView 的（无资源 id），但 StatusBarIconView.mSlot 恒为 "bluetooth"，按 slot 名
@@ -515,7 +522,10 @@ object TrioFeature {
                     // 电量未知（典型：SystemUI 重启后 BATTERY_LEVEL_CHANGED 尚未再上报）：
                     // 主动经 HEADSET 代理查缓存电量并写回原生状态，让三合一与原生图标
                     // 立即显示电量，无需断开重连耳机。
-                    if (v !in 0..100) seedBluetoothBattery(policy, controller)
+                    if (v !in 0..100) {
+                        clearStickyBtBattery(policy, controller)
+                        seedBluetoothBattery(policy, controller)
+                    }
                 }
             }
             else -> chain.proceed()
@@ -610,6 +620,35 @@ object TrioFeature {
     /** 蓝牙电量融合当前是否生效（开关开 + 耳机电量可读）。 */
     private fun btMerged(): Boolean = cachedBtBattery in 0..100 &&
         RemoteConfig.int(FeatureCatalog.KEY_SYSTEMUI_TRIO_BT_BATTERY, 0) > 0
+
+    /**
+     * 清理原生「B+电量」粘滞态：mIsBluetoothEarBattery 只在蓝牙整体关闭时复位，
+     * 设备断开（含改连电动车等无电量设备）时原生 receiver 的清理会被
+     * getBatteryLevel 缓存防护跳过（HonorModuleImpl 断开分支 early return），
+     * 导致 getSuggestBluetoothIcon 用残留电量图标覆盖普通 B 图标。
+     * 条件：电量未知（mBluetoothBatteryLevel ∉ 0..100）且粘滞位仍置位——
+     * 置 false 后重调 updateBluetooth 让原生按当前连接态重绘普通图标；
+     * 重调会再过一次本钩子，此时粘滞位已清，不再重复清理（另有 btClearing 防重入）。
+     * 耳机电量有效（0..100）时不触碰，不影响正常电量显示。
+     */
+    private fun clearStickyBtBattery(policy: Any, controller: Any) {
+        if (btClearing) return
+        val flag = btEarBatteryFlagField
+            ?: findField(controller.javaClass, "mIsBluetoothEarBattery")
+                ?.also { btEarBatteryFlagField = it } ?: return
+        if (!runCatching { flag.getBoolean(controller) }.getOrDefault(false)) return
+        val setter = btBatteryEnableMethod ?: runCatching {
+            controller.javaClass.getMethod("setBluetoothBatteryEnable", Boolean::class.javaPrimitiveType)
+        }.getOrNull()?.also { btBatteryEnableMethod = it } ?: return
+        btClearing = true
+        try {
+            setter.invoke(controller, false)
+            policy.javaClass.getMethod("updateBluetooth").invoke(policy)
+            logDiag(Log.INFO, "已清理蓝牙电量图标粘滞态（无电量设备/未连接）")
+        } finally {
+            btClearing = false
+        }
+    }
 
     /**
      * 蓝牙电量播种：SystemUI 重启后原生 mBluetoothBatteryLevel 未就绪（原生 HEADSET 代理

@@ -18,5 +18,6 @@ object SystemUiHook : TargetHook {
         ControlCenterFeature.install(module, param)
         ShadeLunarFeature.install(module, param)
         NotifBellFeature.install(module, param)
+        CcVolumeLongPressFeature.install(module, param)
     }
 }

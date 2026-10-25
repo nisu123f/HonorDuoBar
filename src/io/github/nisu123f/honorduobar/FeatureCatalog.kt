@@ -41,6 +41,9 @@ object FeatureCatalog {
     /** 隐藏控制中心关机按钮（右上角电源图标）。 */
     const val KEY_SYSTEMUI_HIDE_CC_POWER = "systemui.hide_cc_power"
 
+    /** 控制中心音量条长按弹出系统媒体输出面板（播放器控件 + 设备切换）。 */
+    const val KEY_SYSTEMUI_CC_VOLUME_LONGPRESS = "systemui.cc_volume_longpress_media"
+
     /** 灵动胶囊消息上岛常驻时禁用状态栏缩放（上岛缩小动画播完后触发系统原生回弹恢复，展开/关闭动画不动）。 */
     const val KEY_SYSTEMUI_CAPSULE_NO_SCALE = "systemui.capsule_no_scale"
 
@@ -134,6 +137,12 @@ object FeatureCatalog {
             KEY_SYSTEMUI_HIDE_CC_POWER,
             "隐藏控制中心关机按钮",
             "把控制中心（状态栏右侧下滑面板）右上角的电源按钮设为 GONE；关机仍可通过长按电源键触发。",
+            defaultEnabled = false,
+        ),
+        Feature(
+            KEY_SYSTEMUI_CC_VOLUME_LONGPRESS,
+            "音量条长按切换播放设备",
+            "长按控制中心音量条弹出系统媒体输出面板（含当前播放器卡片与输出设备列表，可切换本机/蓝牙等播放设备）；短按与滑动调节音量不受影响。改动需重启系统界面生效。",
             defaultEnabled = false,
         ),
         Feature(
