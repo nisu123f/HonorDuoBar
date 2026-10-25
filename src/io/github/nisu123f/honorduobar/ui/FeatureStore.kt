@@ -68,6 +68,8 @@ object FeatureStore {
             editor.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_MARGIN_V, capsuleMarginV())
             editor.putInt(FeatureCatalog.KEY_SYSTEMUI_CLOCK_MODE, clockMode())
             editor.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_BT_BATTERY, btBatteryMode())
+            editor.putString(FeatureCatalog.KEY_SYSTEMUI_SHADE_WEATHER_TEMPLATE, weatherTemplate())
+            editor.putInt(FeatureCatalog.KEY_SYSTEMUI_SHADE_WEATHER_CLICK, weatherClick())
             editor.apply()
             true
         }.getOrElse { t ->
@@ -222,6 +224,64 @@ object FeatureStore {
             true
         }.getOrElse { t ->
             XLog.log(Log.WARN, TAG, "远端${label}写入失败", t)
+            false
+        }
+    }
+
+    /** 天气显示模板：变量占位符由 hook 侧替换。 */
+    fun weatherTemplate(): String {
+        val fallback = FeatureCatalog.defaultWeatherTemplate()
+        val p = prefs ?: return fallback
+        return runCatching {
+            p.getString(FeatureCatalog.KEY_SYSTEMUI_SHADE_WEATHER_TEMPLATE, fallback) ?: fallback
+        }.getOrDefault(fallback).ifBlank { fallback }
+    }
+
+    fun setWeatherTemplate(value: String): Boolean {
+        val normalized = value.trim().ifBlank { FeatureCatalog.defaultWeatherTemplate() }
+        prefs?.edit()?.putString(FeatureCatalog.KEY_SYSTEMUI_SHADE_WEATHER_TEMPLATE, normalized)?.apply()
+        val service = FrameworkState.current() ?: run {
+            XLog.log(Log.WARN, TAG, "LSPosed 未连接，天气模板只写入本地")
+            return false
+        }
+        return runCatching {
+            service.getRemotePreferences(FeatureCatalog.REMOTE_GROUP).edit()
+                .putString(FeatureCatalog.KEY_SYSTEMUI_SHADE_WEATHER_TEMPLATE, normalized)
+                .apply()
+            true
+        }.getOrElse { t ->
+            XLog.log(Log.WARN, TAG, "远端天气模板写入失败", t)
+            false
+        }
+    }
+
+    /** 天气行点击行为：0=无响应，1=跳转天气，2=保持原生（流量统计）。 */
+    fun weatherClick(): Int {
+        val p = prefs ?: return FeatureCatalog.defaultWeatherClick()
+        return FeatureCatalog.resolveWeatherClick(
+            runCatching {
+                p.getInt(
+                    FeatureCatalog.KEY_SYSTEMUI_SHADE_WEATHER_CLICK,
+                    FeatureCatalog.defaultWeatherClick(),
+                )
+            }.getOrDefault(FeatureCatalog.defaultWeatherClick()),
+        )
+    }
+
+    fun setWeatherClick(value: Int): Boolean {
+        val normalized = FeatureCatalog.resolveWeatherClick(value)
+        prefs?.edit()?.putInt(FeatureCatalog.KEY_SYSTEMUI_SHADE_WEATHER_CLICK, normalized)?.apply()
+        val service = FrameworkState.current() ?: run {
+            XLog.log(Log.WARN, TAG, "LSPosed 未连接，天气行点击行为只写入本地")
+            return false
+        }
+        return runCatching {
+            service.getRemotePreferences(FeatureCatalog.REMOTE_GROUP).edit()
+                .putInt(FeatureCatalog.KEY_SYSTEMUI_SHADE_WEATHER_CLICK, normalized)
+                .apply()
+            true
+        }.getOrElse { t ->
+            XLog.log(Log.WARN, TAG, "远端天气行点击行为写入失败", t)
             false
         }
     }

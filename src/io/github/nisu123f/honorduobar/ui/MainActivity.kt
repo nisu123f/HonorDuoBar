@@ -10,12 +10,16 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsetsController
+import android.view.WindowManager
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -41,6 +45,10 @@ class MainActivity : Activity() {
     private lateinit var sizeRow: LinearLayout
     private lateinit var clockValue: TextView
     private lateinit var btStyleValue: TextView
+    private lateinit var weatherTemplateRow: LinearLayout
+    private lateinit var weatherTemplateValue: TextView
+    private lateinit var weatherClickRow: LinearLayout
+    private lateinit var weatherClickValue: TextView
     private lateinit var styleRow: LinearLayout
     private lateinit var styleValue: TextView
     private lateinit var capsuleSettingsRow: LinearLayout
@@ -57,6 +65,7 @@ class MainActivity : Activity() {
         // 去掉系统标题栏（应用名常驻占屏幕空间，无实际作用）
         requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
         actionBar?.hide()
+        applyLightSystemBars()
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -70,7 +79,7 @@ class MainActivity : Activity() {
         root.addView(sectionTitle("灵动胶囊"))
         root.addView(buildCard(featureRows { it.key in capsuleKeys }))
         root.addView(sectionTitle("通知中心"))
-        root.addView(buildCard(featureRows { it.key in notifCenterKeys }))
+        root.addView(buildCard(featureRows { it.key in notifCenterKeys } + buildWeatherTemplateRow() + buildWeatherClickRow()))
         root.addView(sectionTitle("控制中心"))
         root.addView(buildCard(featureRows { it.key in controlCenterKeys }))
         root.addView(buildTipCard())
@@ -79,6 +88,28 @@ class MainActivity : Activity() {
         setContentView(ScrollView(this).apply { addView(root) })
         updateStatus()
         renderDependency()
+    }
+
+    /**
+     * 设置页是浅色背景（#F4F5F7 底 + 白色卡片），系统默认的白色状态栏图标会看不清。
+     * 这里把状态栏/导航栏底色改成页面背景色，并声明「浅色系统栏」让图标转深色。
+     */
+    private fun applyLightSystemBars() {
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+        window.statusBarColor = colorBg
+        window.navigationBarColor = colorBg
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.insetsController?.setSystemBarsAppearance(
+                WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                    WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+                WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                    WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility =
+                View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        }
     }
 
     override fun onStart() {
@@ -188,7 +219,9 @@ class MainActivity : Activity() {
                     if (!pushed) {
                         toast("已保存到本地，但 LSPosed 未连接，本次改动不会下发")
                     }
-                    if (feature.key == FeatureCatalog.KEY_SYSTEMUI_TRIO) {
+                    if (feature.key == FeatureCatalog.KEY_SYSTEMUI_TRIO ||
+                        feature.key == FeatureCatalog.KEY_SYSTEMUI_SHADE_WEATHER
+                    ) {
                         renderDependency()
                     }
                     if (FeatureCatalog.features.any { it.dependsOn == feature.key }) {
@@ -292,12 +325,139 @@ class MainActivity : Activity() {
         return row
     }
 
+    private fun buildWeatherTemplateRow(): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, dp(12))
+            setOnClickListener { showWeatherTemplateDialog() }
+        }
+        val texts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        texts.addView(TextView(this).apply {
+            text = "天气显示模板"
+            setTextColor(colorText)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        })
+        texts.addView(TextView(this).apply {
+            text = "用变量自由拼接，变量之间可加空格、「·」「/」等任意字符。可用：{定位} {天气} {天气图标} {当前温度} {最低温度} {最高温度} {体感温度} {湿度} {紫外线} {风向} {风速} {空气质量} {AQI} {PM25} {PM10} {气压} {日出} {日落} {明日天气} {明日最高} {明日最低}。体感仅在温差>2℃时输出；改动需重启系统界面生效。"
+            setTextColor(colorSub)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setPadding(0, dp(3), dp(12), 0)
+            setLineSpacing(dp(2).toFloat(), 1f)
+        })
+        row.addView(texts)
+        weatherTemplateValue = TextView(this).apply {
+            setTextColor(colorAccent)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        }
+        row.addView(weatherTemplateValue)
+        weatherTemplateRow = row
+        updateWeatherTemplateText()
+        return row
+    }
+
+    private fun updateWeatherTemplateText() {
+        val tpl = FeatureStore.weatherTemplate()
+        weatherTemplateValue.text = "${if (tpl.length > 16) tpl.take(15) + "…" else tpl} ›"
+    }
+
+    private fun showWeatherTemplateDialog() {
+        if (switches[FeatureCatalog.KEY_SYSTEMUI_SHADE_WEATHER]?.isChecked != true) {
+            toast("请先开启「通知中心天气」")
+            return
+        }
+        val input = EditText(this).apply {
+            setText(FeatureStore.weatherTemplate())
+            setSingleLine(true)
+            setSelection(text.length)
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("天气显示模板")
+            .setMessage("可用变量：{定位} {天气} {天气图标} {当前温度} {最低温度} {最高温度} {体感温度} {湿度} {紫外线} {风向} {风速} {空气质量} {AQI} {PM25} {PM10} {气压} {日出} {日落} {明日天气} {明日最高} {明日最低}")
+            .setView(input)
+            .setPositiveButton("保存") { _, _ ->
+                val pushed = FeatureStore.setWeatherTemplate(input.text.toString())
+                updateWeatherTemplateText()
+                if (!pushed) toast("已保存到本地，但 LSPosed 未连接，本次改动不会下发")
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun buildWeatherClickRow(): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, dp(12))
+            setOnClickListener { showWeatherClickDialog() }
+        }
+        val texts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        texts.addView(TextView(this).apply {
+            text = "天气行点击行为"
+            setTextColor(colorText)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        })
+        texts.addView(TextView(this).apply {
+            text = "仅在「流量显示关闭、该行只显示天气」时生效：点天气可跳转系统天气 App、不响应，或保持原生跳转流量统计。改动需重启系统界面生效。"
+            setTextColor(colorSub)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setPadding(0, dp(3), dp(12), 0)
+            setLineSpacing(dp(2).toFloat(), 1f)
+        })
+        row.addView(texts)
+        weatherClickValue = TextView(this).apply {
+            setTextColor(colorAccent)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        }
+        row.addView(weatherClickValue)
+        weatherClickRow = row
+        updateWeatherClickText()
+        return row
+    }
+
+    private fun weatherClickLabel(mode: Int): String = when (mode) {
+        0 -> "无响应"
+        2 -> "流量统计"
+        else -> "跳转天气"
+    }
+
+    private fun updateWeatherClickText() {
+        weatherClickValue.text = "${weatherClickLabel(FeatureStore.weatherClick())} ›"
+    }
+
+    private fun showWeatherClickDialog() {
+        if (switches[FeatureCatalog.KEY_SYSTEMUI_SHADE_WEATHER]?.isChecked != true) {
+            toast("请先开启「通知中心天气」")
+            return
+        }
+        val labels = arrayOf("跳转天气 App", "无响应", "保持原生（流量统计）")
+        // 设置值 0/1/2 与选项顺序不同：跳转天气=1、无响应=0、流量统计=2
+        val modes = intArrayOf(1, 0, 2)
+        val current = modes.indexOf(FeatureStore.weatherClick()).coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle("天气行点击行为")
+            .setSingleChoiceItems(labels, current) { dialog, which ->
+                val pushed = FeatureStore.setWeatherClick(modes[which])
+                updateWeatherClickText()
+                if (!pushed) toast("已保存到本地，但 LSPosed 未连接，本次改动不会下发")
+                dialog.dismiss()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
     private fun btStyleLabel(mode: Int): String = when (mode) {
         1 -> "圆弧"
         2 -> "数字"
         else -> "关闭"
     }
-
     private fun updateBtStyleText() {
         btStyleValue.text = "${btStyleLabel(FeatureStore.btBatteryMode())} ›"
     }
@@ -679,6 +839,8 @@ class MainActivity : Activity() {
         }
         if (this::clockValue.isInitialized) updateClockText()
         if (this::btStyleValue.isInitialized) updateBtStyleText()
+        if (this::weatherTemplateValue.isInitialized) updateWeatherTemplateText()
+        if (this::weatherClickValue.isInitialized) updateWeatherClickText()
         if (this::styleValue.isInitialized) updateStyleText()
         if (this::capsuleSettingsValue.isInitialized) updateCapsuleSettingsText()
         renderDependency()
@@ -707,6 +869,14 @@ class MainActivity : Activity() {
         // 胶囊详细设置折叠为「胶囊样式设置」入口行：仅胶囊样式下显示
         if (this::capsuleSettingsRow.isInitialized) {
             capsuleSettingsRow.visibility = if (capsule) View.VISIBLE else View.GONE
+        }
+        // 天气模板/点击行为行跟随「通知中心天气」开关联动置灰
+        if (this::weatherTemplateRow.isInitialized) {
+            val weather = switches[FeatureCatalog.KEY_SYSTEMUI_SHADE_WEATHER]?.isChecked ?: false
+            weatherTemplateRow.alpha = if (weather) 1f else 0.4f
+            if (this::weatherClickRow.isInitialized) {
+                weatherClickRow.alpha = if (weather) 1f else 0.4f
+            }
         }
     }
 
@@ -888,6 +1058,7 @@ class MainActivity : Activity() {
         val notifCenterKeys = listOf(
             FeatureCatalog.KEY_SYSTEMUI_HIDE_NOTIF_BELL,
             FeatureCatalog.KEY_SYSTEMUI_SHADE_LUNAR,
+            FeatureCatalog.KEY_SYSTEMUI_SHADE_WEATHER,
         )
 
         /** 「控制中心」分组的功能 key。 */

@@ -47,6 +47,9 @@ object FeatureCatalog {
      */
     const val KEY_SYSTEMUI_TRIO_BT_BATTERY = "systemui.trio_bt_battery"
 
+    /** 通知中心天气行点击行为（int）：0=无响应，1=跳转天气，2=保持原生（流量统计）。 */
+    const val KEY_SYSTEMUI_SHADE_WEATHER_CLICK = "systemui.shade_weather_click"
+
     /** 状态栏时钟模式（int）：0=不修改，1=隐藏，2=显秒。 */
     const val KEY_SYSTEMUI_CLOCK_MODE = "systemui.clock_mode"
 
@@ -64,6 +67,16 @@ object FeatureCatalog {
 
     /** 隐藏通知中心大时间右侧的铃铛按钮（通知管理入口）。 */
     const val KEY_SYSTEMUI_HIDE_NOTIF_BELL = "systemui.hide_notif_bell"
+
+    /** 通知中心流量行显示天气（流量开启追加，关闭则整行只显示天气）。 */
+    const val KEY_SYSTEMUI_SHADE_WEATHER = "systemui.shade_weather"
+
+    /**
+     * 天气显示模板（String）：支持 {定位} {天气} {天气图标} {当前温度} {最低温度} {最高温度}
+     * {体感温度} {湿度} {紫外线} {风向} {风速} {空气质量} {AQI} {PM25} {PM10} {气压}
+     * {日出} {日落} {明日天气} {明日最高} {明日最低}。
+     */
+    const val KEY_SYSTEMUI_SHADE_WEATHER_TEMPLATE = "systemui.shade_weather_template"
 
     /** 全局诊断日志：向 LSPosed 模块日志输出功能运行状态（默认关，排查问题时再开）。 */
     const val KEY_DEBUG_LOG = "debug.verbose_log"
@@ -146,6 +159,12 @@ object FeatureCatalog {
             dependsOn = KEY_SYSTEMUI_HIDE_NOTIF_BELL,
         ),
         Feature(
+            KEY_SYSTEMUI_SHADE_WEATHER,
+            "通知中心天气",
+            "在通知中心大时间下方的流量信息行显示天气：系统流量显示开启时追加在「总量 xxGB」之后；流量显示关闭时该行改为仅显示天气。显示内容由「天气显示模板」用变量拼接：{定位} {天气} {天气图标} {当前温度} {最低温度} {最高温度} {体感温度} {湿度} {紫外线} {风向} {风速} {空气质量} {AQI} {PM25} {PM10} {气压} {日出} {日落} {明日天气} {明日最高} {明日最低}，变量之间可加空格或任意分隔符。数据读自系统锁屏天气插件同款通道（不发起网络请求、息屏不查询）；天气 App 数据变化时通过广播即时刷新，另有 30 分钟兜底缓存。改动需重启系统界面生效。",
+            defaultEnabled = false,
+        ),
+        Feature(
             KEY_SYSTEMUI_HIDE_CC_POWER,
             "隐藏控制中心关机按钮",
             "把控制中心（状态栏右侧下滑面板）右上角的电源按钮设为 GONE；关机仍可通过长按电源键触发。",
@@ -210,6 +229,15 @@ object FeatureCatalog {
 
     /** 胶囊长度归一：设计单位 -30–60。 */
     fun resolveCapsuleLength(raw: Int): Int = raw.coerceIn(-30, 60)
+
+    /** 天气显示模板默认值：📍定位 + 图标天气当前温度 | 体感 | 空气质量 | 最低/最高。 */
+    fun defaultWeatherTemplate(): String =
+        "📍{定位} {天气图标}{天气}{当前温度} | {体感温度} | {空气质量} | {最低温度}/{最高温度}"
+
+    /** 天气行点击行为默认值：跳转天气。 */
+    fun defaultWeatherClick(): Int = 1
+
+    fun resolveWeatherClick(raw: Int): Int = if (raw in 0..2) raw else defaultWeatherClick()
 
     /** 胶囊高度归一：14–26 dp。 */
     fun resolveCapsuleHeight(raw: Int): Int = raw.coerceIn(14, 26)

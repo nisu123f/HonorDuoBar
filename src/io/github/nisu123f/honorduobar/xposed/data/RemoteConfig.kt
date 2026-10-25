@@ -30,4 +30,7 @@ object RemoteConfig : FeatureGate {
 
     fun int(key: String, fallback: Int): Int =
         runCatching { prefs?.getInt(key, fallback) ?: fallback }.getOrDefault(fallback)
+
+    fun string(key: String, fallback: String): String =
+        runCatching { prefs?.getString(key, fallback) ?: fallback }.getOrDefault(fallback)
 }
