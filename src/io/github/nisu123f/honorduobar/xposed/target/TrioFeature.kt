@@ -7,6 +7,7 @@ import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
@@ -70,6 +71,8 @@ object TrioFeature {
     private const val METHOD_UPDATE_BLUETOOTH = "updateBluetooth"
 
     private const val TAG_VIEW = "hh_trio_view"
+    /** 字形样式 1=胶囊（0=圆环，与 FeatureCatalog.KEY_SYSTEMUI_TRIO_STYLE 对应）。 */
+    private const val STYLE_CAPSULE = 1
     /** 三合一开启时要隐藏的原生件：整组 + 组内单件兜底（id 不存在会自动跳过）。 */
     private val HIDDEN_IDS = arrayOf(
         "signalIcons",
@@ -130,6 +133,9 @@ object TrioFeature {
      * proceed 后从 thisObject.mBluetooth 反射读 mBluetoothBatteryLevel 即可。
      */
     @Volatile private var cachedBtBattery: Int = -1
+
+    /** 主副卡诊断去重（多个 TrioView 实例共享同一状态，变化时只输出一次）。 */
+    @Volatile private var lastSlotDiagMsg: String? = null
 
     /** 缓存反射字段（getDeclaredField 是低频调用但仍要避免每次重建）。 */
     @Volatile private var btPolicyBluetoothField: Field? = null
@@ -881,6 +887,39 @@ object TrioFeature {
             levelColor = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_LEVEL_COLOR),
             antiBurnIn = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_ANTI_BURNIN),
             btBatteryMode = RemoteConfig.int(FeatureCatalog.KEY_SYSTEMUI_TRIO_BT_BATTERY, 0).coerceIn(0, 2),
+            style = FeatureCatalog.resolveTrioStyle(
+                RemoteConfig.int(FeatureCatalog.KEY_SYSTEMUI_TRIO_STYLE, FeatureCatalog.defaultTrioStyle()),
+            ),
+            capsuleLength = FeatureCatalog.resolveCapsuleLength(
+                RemoteConfig.int(
+                    FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_LENGTH,
+                    FeatureCatalog.defaultCapsuleLength(),
+                ),
+            ),
+            capsuleHeight = FeatureCatalog.resolveCapsuleHeight(
+                RemoteConfig.int(
+                    FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_HEIGHT,
+                    FeatureCatalog.defaultCapsuleHeight(),
+                ),
+            ),
+            capsuleStrokePct = FeatureCatalog.resolveCapsuleStroke(
+                RemoteConfig.int(
+                    FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_STROKE,
+                    FeatureCatalog.defaultCapsuleStroke(),
+                ),
+            ),
+            capsuleMarginHPct = FeatureCatalog.resolveCapsuleMarginH(
+                RemoteConfig.int(
+                    FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_MARGIN_H,
+                    FeatureCatalog.defaultCapsuleMarginH(),
+                ),
+            ),
+            capsuleMarginVPct = FeatureCatalog.resolveCapsuleMarginV(
+                RemoteConfig.int(
+                    FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_MARGIN_V,
+                    FeatureCatalog.defaultCapsuleMarginV(),
+                ),
+            ),
         )
         val sizeDp = FeatureCatalog.resolveTrioSize(
             RemoteConfig.int(
@@ -895,13 +934,20 @@ object TrioFeature {
         }
         view.tag = TAG_VIEW
         // 固定 dp 尺寸，不跟父容器高度拉伸：横屏/锁屏的状态栏行高更大时字形也不会放大。
-        val side = dp(ctx, sizeDp)
+        // 胶囊按「独立高度 × 宽高比」放宽；圆环保持正方形、用三合一尺寸。
+        val side = dp(ctx, if (config.style == STYLE_CAPSULE) config.capsuleHeight else sizeDp)
+        val widthPx = if (config.style == STYLE_CAPSULE) {
+            (side * FeatureCatalog.capsuleAspect(config.capsuleLength, config.capsuleStrokePct))
+                .toInt().coerceAtLeast(side)
+        } else {
+            side
+        }
         val lp: ViewGroup.LayoutParams = if (systemIcons is LinearLayout) {
-            LinearLayout.LayoutParams(side, side).apply {
+            LinearLayout.LayoutParams(widthPx, side).apply {
                 gravity = Gravity.CENTER_VERTICAL
             }
         } else {
-            ViewGroup.LayoutParams(side, side)
+            ViewGroup.LayoutParams(widthPx, side)
         }
         systemIcons.addView(view, lp)
 
@@ -945,6 +991,12 @@ object TrioFeature {
         val levelColor: Boolean,
         val antiBurnIn: Boolean,
         val btBatteryMode: Int,
+        val style: Int,
+        val capsuleLength: Int,
+        val capsuleHeight: Int,
+        val capsuleStrokePct: Int,
+        val capsuleMarginHPct: Int,
+        val capsuleMarginVPct: Int,
     )
 
     /** 自绘字形。所有几何量都在 120×120 设计空间内，绘制前统一缩放。 */
@@ -1007,6 +1059,157 @@ object TrioFeature {
             close()
         }
 
+        // ---- 胶囊样式几何（轮廓 138×59 设计单位，参考 HyperDuo） ----
+        // 线宽（占轮廓高 %）与内部元素字高（占轮廓高 %）可在设置页调整，几何随配置派生。
+        private val capStroke = (CAP_BOTTOM - CAP_TOP) * config.capsuleStrokePct / 100f
+        /** 信号点半径 = 半个线宽：4 颗点读作「描边串起的珠子」，与线宽同步。 */
+        private val capDotR = capStroke * 0.5f
+        /** 单个开口切深：4 点半跨 + 点半径 + 留白 + 半个描边。 */
+        private val capDotReach =
+            CAP_DOT_PITCH * 1.5f + capDotR + CAP_DOT_CLEARANCE + capStroke * 0.5f
+        private val capInkLeft = CAP_LEFT - capStroke * 0.5f
+        private val capInkTop = CAP_TOP - capStroke * 0.5f
+        private val capInkH = (CAP_BOTTOM - CAP_TOP) + capStroke
+        /** 左右边距（占轮廓高 %）：左格图标/文字与右格数字距内壁的内缩。 */
+        private val capTextInset = (CAP_BOTTOM - CAP_TOP) * config.capsuleMarginHPct / 100f
+        private val capInteriorLeft = CAP_LEFT + capStroke * 0.5f
+        private val capInteriorTop = CAP_TOP + capStroke * 0.5f + capDotR
+        private val capInteriorBottom = CAP_BOTTOM - capStroke * 0.5f - capDotR
+        private val capInteriorCy = (capInteriorTop + capInteriorBottom) * 0.5f
+        /** 元素字高 = 内腔高 − 上下边距（边距占轮廓高 %），最小 8 设计单位。 */
+        private val capTextCap = (
+            (capInteriorBottom - capInteriorTop) -
+                2f * (CAP_BOTTOM - CAP_TOP) * config.capsuleMarginVPct / 100f
+            ).coerceAtLeast(8f)
+        private val capTextSize = capTextCap / 0.71f
+        /** 胶囊 Wi-Fi：把墨迹高 35.5548 的环内 Wi-Fi 缩到设计字高。 */
+        private val capWifiScale = capTextCap / CAP_WIFI_INK_H
+        private val capLeftIconCx =
+            capInteriorLeft + capTextInset + CAP_WIFI_INK_W * capWifiScale * 0.5f
+        private val capWifiStroke = WIFI_STROKE * capWifiScale
+        private val capW1R = W1_R * W_SCALE * capWifiScale
+        private val capW1Cy = capInteriorCy + (W1_CY + W_LIFT - CAP_WIFI_INK_CY) * capWifiScale
+        private val capW2R = W2_R * W_SCALE * capWifiScale
+        private val capW2Cy = capInteriorCy + (W2_CY_BAKED - CAP_WIFI_INK_CY) * capWifiScale
+        private val capWDotY = capInteriorCy + (W_DOT_Y_BAKED - CAP_WIFI_INK_CY) * capWifiScale
+        private val capWDotR = W_DOT_R_BAKED * capWifiScale
+        private val capW1Oval = RectF(
+            capLeftIconCx - capW1R, capW1Cy - capW1R,
+            capLeftIconCx + capW1R, capW1Cy + capW1R,
+        )
+        private val capW2Oval = RectF(
+            capLeftIconCx - capW2R, capW2Cy - capW2R,
+            capLeftIconCx + capW2R, capW2Cy + capW2R,
+        )
+        /** 胶囊飞机图标：原机 39.2×29.1，按字高缩放。 */
+        private val capPlaneScale = capTextCap / CAP_PLANE_INK_H
+        /** 下开口蓝牙电量：进度线半长随点半径，线宽随描边（0.6 倍）。 */
+        private val capBtBarHalf = CAP_DOT_PITCH * 1.5f + capDotR
+        private val capBtBarStroke = capStroke * 0.6f
+
+        private val capRight = CAP_RIGHT_REF + config.capsuleLength
+        private val capCx = (CAP_LEFT + capRight) * 0.5f
+        private val capInkW = capRight - CAP_LEFT + capStroke
+        /** 胶囊过短时开口切深收窄到剩余直段，避免开口越过圆帽。 */
+        private val capReach = min(capDotReach, capCx - CAP_LEFT - CAP_RADIUS)
+        private val capArcRect = RectF()
+
+        /** 胶囊轮廓：上下各一个开口，剩下左、右两段开放弧；长度固定，只构建一次。 */
+        private val capsulePath = Path().apply {
+            val left = CAP_LEFT
+            val right = capRight
+            val top = CAP_TOP
+            val bottom = CAP_BOTTOM
+            val r = CAP_RADIUS
+            val cy = (top + bottom) * 0.5f
+            val k = 0.55228475f * r
+            // 右段：上开口右缘 → 右上直段 → 右圆帽 → 右下直段 → 下开口右缘
+            moveTo(capCx + capReach, top)
+            lineTo(right - r, top)
+            cubicTo(right - r + k, top, right, cy - k, right, cy)
+            cubicTo(right, cy + k, right - r + k, bottom, right - r, bottom)
+            lineTo(capCx + capReach, bottom)
+            // 左段：下开口左缘 → 左下直段 → 左圆帽 → 左上直段 → 上开口左缘
+            moveTo(capCx - capReach, bottom)
+            lineTo(left + r, bottom)
+            cubicTo(left + r - k, bottom, left, cy + k, left, cy)
+            cubicTo(left, cy - k, left + r - k, top, left + r, top)
+            lineTo(capCx - capReach, top)
+        }
+
+        /**
+         * 顶部闭合轮廓（单卡/无卡时）：底部仍开口放信号/蓝牙电量，顶部不截断。
+         * 电量填充从下开口左缘出发逆时针走一整圈，全程是一条连续线；
+         * 长度固定，只构建一次。
+         */
+        private val capsuleTopClosedPath = Path().apply {
+            val left = CAP_LEFT
+            val right = capRight
+            val top = CAP_TOP
+            val bottom = CAP_BOTTOM
+            val r = CAP_RADIUS
+            val cy = (top + bottom) * 0.5f
+            val k = 0.55228475f * r
+            moveTo(capCx - capReach, bottom)
+            lineTo(left + r, bottom)
+            cubicTo(left + r - k, bottom, left, cy + k, left, cy)
+            cubicTo(left, cy - k, left + r - k, top, left + r, top)
+            lineTo(right - r, top)
+            cubicTo(right - r + k, top, right, cy - k, right, cy)
+            cubicTo(right, cy + k, right - r + k, bottom, right - r, bottom)
+            lineTo(capCx + capReach, bottom)
+        }
+
+        /** 底部闭合轮廓（无信号可显示但上开口有蓝牙电量时）：顶部开口，底部不截断。 */
+        private val capsuleBottomClosedPath = Path().apply {
+            val left = CAP_LEFT
+            val right = capRight
+            val top = CAP_TOP
+            val bottom = CAP_BOTTOM
+            val r = CAP_RADIUS
+            val cy = (top + bottom) * 0.5f
+            val k = 0.55228475f * r
+            moveTo(capCx - capReach, top)
+            lineTo(left + r, top)
+            cubicTo(left + r - k, top, left, cy - k, left, cy)
+            cubicTo(left, cy + k, left + r - k, bottom, left + r, bottom)
+            lineTo(right - r, bottom)
+            cubicTo(right - r + k, bottom, right, cy + k, right, cy)
+            cubicTo(right, cy - k, right - r + k, top, right - r, top)
+            lineTo(capCx + capReach, top)
+        }
+
+        /** 完整闭合胶囊（双卡都无且无蓝牙电量时）：无开口，电量环全程连续。 */
+        private val capsuleFullPath = Path().apply {
+            val left = CAP_LEFT
+            val right = capRight
+            val top = CAP_TOP
+            val bottom = CAP_BOTTOM
+            val r = CAP_RADIUS
+            val cy = (top + bottom) * 0.5f
+            val k = 0.55228475f * r
+            moveTo(left + r, top)
+            lineTo(right - r, top)
+            cubicTo(right - r + k, top, right, cy - k, right, cy)
+            cubicTo(right, cy + k, right - r + k, bottom, right - r, bottom)
+            lineTo(left + r, bottom)
+            cubicTo(left + r - k, bottom, left, cy + k, left, cy)
+            cubicTo(left, cy - k, left + r - k, top, left + r, top)
+        }
+
+        /** 胶囊左格飞机图标：把 120 空间的 plane 烘进左格，绘制时零矩阵操作。 */
+        private val capsulePlane = Path(plane).apply {
+            transform(
+                Matrix().apply {
+                    setScale(capPlaneScale, capPlaneScale)
+                    postTranslate(
+                        capLeftIconCx - CAP_PLANE_CX * capPlaneScale,
+                        capInteriorCy - CAP_PLANE_CY * capPlaneScale,
+                    )
+                },
+            )
+        }
+
         private val handler = Handler(Looper.getMainLooper())
         private val refreshTask = object : Runnable {
             override fun run() {
@@ -1065,6 +1268,8 @@ object TrioFeature {
         private var wifiLevel = -1
         private var airplaneMode = false
         private var mobileLevels = IntArray(0)
+        /** 胶囊样式用双卡档位：下标 0/1 = SIM 卡槽 0/1，-1 表示该槽无卡或读不到。 */
+        private var slotLevels = IntArray(2) { -1 }
         private var netType = ""
         /** 蓝牙耳机电量（0–100）；开关关 / 无耳机连接 / 设备不上报 → -1。 */
         private var bluetoothBattery = -1
@@ -1164,6 +1369,47 @@ object TrioFeature {
             }
             mobileLevels = if (level != null && level >= 0) intArrayOf(level.coerceIn(0, 4)) else IntArray(0)
 
+            // 胶囊样式需要主卡/副卡两档：按 simSlotIndex 取每个卡槽自己的 signalStrength，
+            // 不受「默认数据卡」选择影响；单卡/被关闭的卡槽保持 -1（底部闭合不截断）。
+            // 设置里「关闭」的卡仍留在活动订阅列表，以 serviceState == POWER_OFF 识别并跳过。
+            // 诊断：组合变化时输出各卡槽证据（开关卡定位用，受全局开关门控）。
+            val slots = IntArray(2) { -1 }
+            val diagSb = StringBuilder()
+            if (subs != null) {
+                for (info in subs) {
+                    val slot = info.simSlotIndex
+                    if (slot !in 0..1) continue
+                    val subTm = runCatching { tm?.createForSubscriptionId(info.subscriptionId) }.getOrNull()
+                    val svcState = runCatching { subTm?.serviceState?.state }.getOrNull()
+                    val poweredOff = svcState == android.telephony.ServiceState.STATE_POWER_OFF
+                    val subLevel = if (poweredOff) {
+                        null
+                    } else {
+                        runCatching { subTm?.signalStrength?.level }.getOrNull()
+                    }
+                    if (subLevel != null && subLevel >= 0) slots[slot] = subLevel.coerceIn(0, 4)
+                    diagSb.append(" [s$slot id=${info.subscriptionId} svc=$svcState lv=$subLevel]")
+                }
+            }
+            if (slots[0] < 0 && slots[1] < 0) {
+                // 拿不到订阅列表时退回全局 signalStrength，至少让主卡有档位。
+                val fallback = runCatching { tm?.signalStrength?.level }.getOrNull()
+                if (fallback != null && fallback >= 0) slots[0] = fallback.coerceIn(0, 4)
+            }
+            // 信号以下开口为主：单卡（无论插哪个槽）归位到下开口，顶部闭合；
+            // 双卡时上开口 = 卡1、下开口 = 卡2。
+            val dual = slots[0] >= 0 && slots[1] >= 0
+            if (!dual && (slots[0] >= 0 || slots[1] >= 0)) {
+                slots[1] = if (slots[0] >= 0) slots[0] else slots[1]
+                slots[0] = -1
+            }
+            val diagMsg = "sim主副卡: slots=${slots[0]},${slots[1]} subs=${subs?.size ?: -1}$diagSb"
+            if (diagMsg != lastSlotDiagMsg) {
+                lastSlotDiagMsg = diagMsg
+                XLog.diag(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX $diagMsg")
+            }
+            slotLevels = slots
+
             netType = if (wifiLevel < 0) {
                 mapNetworkType(runCatching { tm?.dataNetworkType }.getOrNull() ?: -1)
             } else {
@@ -1174,6 +1420,10 @@ object TrioFeature {
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
+            if (config.style == STYLE_CAPSULE) {
+                drawCapsule(canvas)
+                return
+            }
             val size = min(width, height).toFloat()
             if (size <= 0f) return
             val scale = size / 120f
@@ -1349,6 +1599,223 @@ object TrioFeature {
             canvas.drawText(text, cx, baseline, textPaint)
         }
 
+        // ---- 胶囊样式：胶囊轮廓本身就是电量轨道 ----
+        // 下开口固定给信号：双卡 = 卡2、单卡 = 唯一的卡（无论插哪个槽）、无卡则闭合；
+        // 上开口 = 卡1（双卡），蓝牙耳机电量优先顶替上开口；都无内容则闭合为完整胶囊。
+        // 电量从下开口左缘逆时针走一整圈；开口随状态开合，无开口的边电量线连续。
+        // 胶囊内左格 Wi-Fi/制式（飞行模式为飞机），右格电量数字。
+
+        private fun drawCapsule(canvas: Canvas) {
+            val fg = resolveForeground()
+            val scale = height / capInkH
+            if (scale <= 0f) return
+            val save = canvas.save()
+            canvas.translate(
+                (width - capInkW * scale) * 0.5f,
+                (height - capInkH * scale) * 0.5f,
+            )
+            canvas.scale(scale, scale)
+            canvas.translate(-capInkLeft, -capInkTop)
+
+            // 开口判定：下开口固定给信号（单卡=唯一的卡，双卡=卡2，无卡则闭合）；
+            // 上开口 = 卡1（双卡）或蓝牙电量（顶替）；都无内容则闭合。全闭即完整胶囊。
+            val bt = bluetoothBattery
+            val btShown = config.btBatteryMode > 0 && bt in 0..100
+            val topOpen = btShown || slotLevels.getOrElse(0) { -1 } >= 0
+            val bottomOpen = slotLevels.getOrElse(1) { -1 } >= 0
+
+            // 轨道：按开口组合选轮廓
+            ringPaint.strokeWidth = capStroke
+            ringPaint.color = withAlpha(fg, TRACK_ALPHA)
+            canvas.drawPath(
+                when {
+                    topOpen && bottomOpen -> capsulePath
+                    topOpen -> capsuleBottomClosedPath
+                    bottomOpen -> capsuleTopClosedPath
+                    else -> capsuleFullPath
+                },
+                ringPaint,
+            )
+
+            // 电量填充：取不到电量时仍用绿色画满，表达充电状态
+            val fraction = when {
+                level > 0 -> level / 100f
+                charging -> 1f
+                else -> 0f
+            }
+            if (fraction > 0f) {
+                ringPaint.color = when {
+                    charging -> COLOR_CHARGING
+                    config.levelColor && level <= 10 -> COLOR_DANGER
+                    config.levelColor && level <= 20 -> COLOR_LOW
+                    else -> fg
+                }
+                drawCapsuleFill(canvas, fraction, topOpen, bottomOpen)
+            }
+
+            drawCapsuleSignals(canvas, fg, bt, btShown)
+            drawCapsuleLeft(canvas, fg)
+            drawCapsuleRight(canvas, fg)
+
+            canvas.restoreToCount(save)
+        }
+
+        private fun drawCapsuleFill(canvas: Canvas, fraction: Float, topOpen: Boolean, bottomOpen: Boolean) {
+            val left = CAP_LEFT
+            val right = capRight
+            val top = CAP_TOP
+            val bottom = CAP_BOTTOM
+            val r = CAP_RADIUS
+            // 底部开口时先走下开口左缘 → 左圆帽的短直段；闭合时直接从左圆帽起点开始
+            val bottomFirst = if (bottomOpen) (capCx - capReach) - (left + r) else 0f
+            // 顶部开口时左/右两段直段；闭合时合并为一条整段
+            val topSeg1 = if (topOpen) bottomFirst else (right - r) - (left + r)
+            val topSeg2 = if (topOpen) (right - r) - (capCx + capReach) else 0f
+            // 末端底部直段：开口时到下开口右缘，闭合时贯穿整条底边
+            val bottomLast = if (bottomOpen) topSeg2 else (right - r) - (left + r)
+            val capLen = CAP_PI * r
+            val total = bottomFirst + capLen + topSeg1 + topSeg2 + capLen + bottomLast
+            if (total <= 0f) return
+            var remaining = total * fraction.coerceIn(0f, 1f)
+
+            // 1. 左下直段（下开口左缘 → 左圆帽起点；底部闭合时跳过）
+            var used = min(remaining, bottomFirst).coerceAtLeast(0f)
+            remaining -= used
+            if (used > 0f) {
+                val x0 = capCx - capReach
+                canvas.drawLine(x0, bottom, x0 - used, bottom, ringPaint)
+            }
+            // 2. 左圆帽（90° → 270°）
+            used = min(remaining, capLen).coerceAtLeast(0f)
+            remaining -= used
+            if (used > 0f) {
+                capArcRect.set(left, top, left + 2f * r, bottom)
+                canvas.drawArc(capArcRect, 90f, used / r * RAD_TO_DEG, false, ringPaint)
+            }
+            // 3. 顶部直段（闭合时为整条：左端 → 右端）
+            used = min(remaining, topSeg1).coerceAtLeast(0f)
+            remaining -= used
+            if (used > 0f) {
+                canvas.drawLine(left + r, top, left + r + used, top, ringPaint)
+            }
+            // 4. 右上直段（仅顶部开口时存在）
+            used = min(remaining, topSeg2).coerceAtLeast(0f)
+            remaining -= used
+            if (used > 0f) {
+                canvas.drawLine(capCx + capReach, top, capCx + capReach + used, top, ringPaint)
+            }
+            // 5. 右圆帽（270° → 450°）
+            used = min(remaining, capLen).coerceAtLeast(0f)
+            remaining -= used
+            if (used > 0f) {
+                capArcRect.set(right - 2f * r, top, right, bottom)
+                canvas.drawArc(capArcRect, 270f, used / r * RAD_TO_DEG, false, ringPaint)
+            }
+            // 6. 末端底部直段（右圆帽末端 → 下开口右缘；闭合时贯穿底边回到左圆帽起点）
+            used = min(remaining, bottomLast).coerceAtLeast(0f)
+            if (used > 0f) {
+                canvas.drawLine(right - r, bottom, right - r - used, bottom, ringPaint)
+            }
+        }
+
+        private fun drawCapsuleSignals(canvas: Canvas, fg: Int, bt: Int, btShown: Boolean) {
+            val inactive = withAlpha(fg, TRACK_ALPHA)
+            val firstX = capCx - CAP_DOT_PITCH * 1.5f
+
+            // 上开口：蓝牙耳机电量优先顶替；否则 = 卡1 信号点（仅双卡）
+            if (btShown) {
+                if (config.btBatteryMode == 2) {
+                    textPaint.color = fg
+                    textPaint.textSize = CAP_BT_TEXT_SIZE
+                    textPaint.typeface = Typeface.create("sans-serif", Typeface.BOLD)
+                    textPaint.textAlign = Paint.Align.CENTER
+                    drawTextCentred(canvas, bt.toString(), capCx, CAP_TOP + 1f)
+                } else {
+                    ringPaint.strokeWidth = capBtBarStroke
+                    ringPaint.color = inactive
+                    canvas.drawLine(
+                        capCx - capBtBarHalf, CAP_TOP,
+                        capCx + capBtBarHalf, CAP_TOP, ringPaint,
+                    )
+                    if (bt > 0) {
+                        ringPaint.color = fg
+                        canvas.drawLine(
+                            capCx - capBtBarHalf, CAP_TOP,
+                            capCx - capBtBarHalf + 2f * capBtBarHalf * bt / 100f,
+                            CAP_TOP, ringPaint,
+                        )
+                    }
+                }
+            } else if (slotLevels.getOrElse(0) { -1 } >= 0) {
+                val topLit = slotLevels.getOrElse(0) { -1 }
+                for (i in 0 until 4) {
+                    signalPaint.color = if (i < topLit) fg else inactive
+                    canvas.drawCircle(firstX + i * CAP_DOT_PITCH, CAP_TOP, capDotR, signalPaint)
+                }
+            }
+
+            // 下开口固定给信号：双卡 = 卡2，单卡 = 唯一的卡；无卡时底部闭合不画
+            val bottomLit = slotLevels.getOrElse(1) { -1 }
+            if (bottomLit < 0) return
+            for (i in 0 until 4) {
+                signalPaint.color = if (i < bottomLit) fg else inactive
+                canvas.drawCircle(firstX + i * CAP_DOT_PITCH, CAP_BOTTOM, capDotR, signalPaint)
+            }
+        }
+
+        private fun drawCapsuleLeft(canvas: Canvas, fg: Int) {
+            if (airplaneMode) {
+                signalPaint.color = fg
+                canvas.drawPath(capsulePlane, signalPaint)
+                return
+            }
+            if (config.showWifi && wifiLevel > 0) {
+                ringPaint.color = fg
+                ringPaint.strokeWidth = capWifiStroke
+                if (wifiLevel >= 3) {
+                    canvas.drawArc(capW1Oval, W1_START, W1_SWEEP, false, ringPaint)
+                }
+                if (wifiLevel >= 2) {
+                    canvas.drawArc(capW2Oval, W2_START, W2_SWEEP, false, ringPaint)
+                }
+                signalPaint.color = fg
+                canvas.drawCircle(capLeftIconCx, capWDotY, capWDotR, signalPaint)
+                return
+            }
+            if (!config.showType || netType.isEmpty()) return
+            textPaint.color = fg
+            // 制式文字比 Wi-Fi 弧占面大：字号缩到 0.82 档，给左右两侧留出与 Wi-Fi 态接近的留白
+            textPaint.textSize = capTextSize * 0.82f
+            textPaint.typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            textPaint.textAlign = Paint.Align.LEFT
+            drawTextAt(canvas, netType, capInteriorLeft + capTextInset, capInteriorCy)
+        }
+
+        private fun drawCapsuleRight(canvas: Canvas, fg: Int) {
+            if (!config.showPercent || level < 0) return
+            textPaint.color = when {
+                charging -> COLOR_CHARGING
+                config.levelColor && level <= 10 -> COLOR_DANGER
+                config.levelColor && level <= 20 -> COLOR_LOW
+                else -> fg
+            }
+            textPaint.textSize = capTextSize
+            textPaint.typeface = Typeface.create("sans-serif", Typeface.BOLD)
+            textPaint.textAlign = Paint.Align.RIGHT
+            drawTextAt(
+                canvas,
+                level.toString(),
+                capRight - capStroke * 0.5f - capTextInset,
+                capInteriorCy,
+            )
+        }
+
+        /** 按当前 textAlign 在 (x, cy) 处垂直居中绘制文本。 */
+        private fun drawTextAt(canvas: Canvas, text: String, x: Float, cy: Float) {
+            textPaint.getTextBounds(text, 0, text.length, textBounds)
+            canvas.drawText(text, x, cy - (textBounds.top + textBounds.bottom) / 2f, textPaint)
+        }
+
         private fun withAlpha(color: Int, alpha: Int): Int =
             (color and 0x00FFFFFF) or (alpha shl 24)
 
@@ -1428,6 +1895,29 @@ object TrioFeature {
                 W_CX - W2_R * W_SCALE, W2_CY_BAKED - W2_R * W_SCALE,
                 W_CX + W2_R * W_SCALE, W2_CY_BAKED + W2_R * W_SCALE,
             )
+
+            // ---- 胶囊样式 ----
+            // 轮廓 138×59、圆角 29.5；线宽与字高占轮廓高的百分比可调，派生几何见 TrioView 实例字段。
+            const val CAP_LEFT = 1f
+            const val CAP_RIGHT_REF = 139f
+            const val CAP_TOP = 1f
+            const val CAP_BOTTOM = 60f
+            const val CAP_RADIUS = 29.5f
+            const val CAP_DOT_PITCH = 10.9f
+            const val CAP_DOT_CLEARANCE = 5.31f
+            const val CAP_PI = 3.1415927f
+            const val RAD_TO_DEG = 57.29578f
+            /** 下开口里的蓝牙电量数字模式字号（设计单位，开口高度有限不随字高设置缩放）。 */
+            const val CAP_BT_TEXT_SIZE = 12f
+            /** 环内 Wi-Fi 原始墨迹盒（胶囊 Wi-Fi 按字高等比缩放的基准）。 */
+            const val CAP_WIFI_INK_H = 35.5548f
+            const val CAP_WIFI_INK_CY = 22.4609f
+            const val CAP_WIFI_INK_W = 47.856f
+            /** 胶囊飞机图标：原机 39.2×29.1，中心 (60, 26.05)，按字高缩放。 */
+            const val CAP_PLANE_INK_H = 29.1f
+            const val CAP_PLANE_CX = 60f
+            const val CAP_PLANE_CY = 26.05f
+
             const val COLOR_DANGER = 0xFFFF3B30.toInt()
             const val COLOR_LOW = 0xFFF2B900.toInt()
             const val COLOR_CHARGING = 0xFF34C759.toInt()

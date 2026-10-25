@@ -23,6 +23,24 @@ object FeatureCatalog {
     /** 三合一图标尺寸（dp，18–26）。 */
     const val KEY_SYSTEMUI_TRIO_SIZE = "systemui.trio_size"
 
+    /** 三合一字形样式（int）：0=圆环，1=胶囊。 */
+    const val KEY_SYSTEMUI_TRIO_STYLE = "systemui.trio_style"
+
+    /** 胶囊长度（设计单位，-30–60）；仅胶囊样式生效，0=参考长度。 */
+    const val KEY_SYSTEMUI_TRIO_CAPSULE_LENGTH = "systemui.trio_capsule_length"
+
+    /** 胶囊高度（dp，14–26）；仅胶囊样式生效，宽度 = 高度 × 宽高比。 */
+    const val KEY_SYSTEMUI_TRIO_CAPSULE_HEIGHT = "systemui.trio_capsule_height"
+
+    /** 胶囊线宽（占轮廓高的百分比，8–18）；信号点半径与蓝牙电量线宽同步跟随。 */
+    const val KEY_SYSTEMUI_TRIO_CAPSULE_STROKE = "systemui.trio_capsule_stroke"
+
+    /** 胶囊内左右边距（占轮廓高的百分比，2–20）：Wi-Fi/5G 与电量数字距左右内壁。 */
+    const val KEY_SYSTEMUI_TRIO_CAPSULE_MARGIN_H = "systemui.trio_capsule_margin_h"
+
+    /** 胶囊内上下边距（占轮廓高的百分比，10–26）；元素高度 = 内腔高 − 2×边距。 */
+    const val KEY_SYSTEMUI_TRIO_CAPSULE_MARGIN_V = "systemui.trio_capsule_margin_v"
+
     /**
      * 三合一蓝牙耳机电量（int 三态）：0=关闭，1=圆弧，2=数字。
      * 旧版同键 boolean 会被 getInt 读到 ClassCastException → runCatching 回默认 0（关闭），自然迁移。
@@ -154,6 +172,24 @@ object FeatureCatalog {
     /** 三合一尺寸默认值（dp，可直接在 18–26 之间调节）。 */
     fun defaultTrioSize(): Int = 20
 
+    /** 三合一字形样式默认值：圆环（保持旧版外观）。 */
+    fun defaultTrioStyle(): Int = 0
+
+    /** 胶囊长度默认值：-14（16dp 高 + 10% 线宽时约 32dp 宽）。 */
+    fun defaultCapsuleLength(): Int = -14
+
+    /** 胶囊高度默认值（dp）。 */
+    fun defaultCapsuleHeight(): Int = 16
+
+    /** 胶囊线宽默认值：10%（5.9/59 设计单位）。 */
+    fun defaultCapsuleStroke(): Int = 10
+
+    /** 胶囊内左右边距默认值（%）。 */
+    fun defaultCapsuleMarginH(): Int = 17
+
+    /** 胶囊内上下边距默认值（%，默认线宽下元素字高 ≈ 23.6 设计单位）。 */
+    fun defaultCapsuleMarginV(): Int = 20
+
     /** 时钟模式默认值：不修改。 */
     fun defaultClockMode(): Int = 0
 
@@ -167,5 +203,34 @@ object FeatureCatalog {
         1 -> 22
         2 -> 26
         else -> defaultTrioSize()
+    }
+
+    /** 样式归一：只认 0/1，其余回圆环。 */
+    fun resolveTrioStyle(raw: Int): Int = if (raw in 0..1) raw else defaultTrioStyle()
+
+    /** 胶囊长度归一：设计单位 -30–60。 */
+    fun resolveCapsuleLength(raw: Int): Int = raw.coerceIn(-30, 60)
+
+    /** 胶囊高度归一：14–26 dp。 */
+    fun resolveCapsuleHeight(raw: Int): Int = raw.coerceIn(14, 26)
+
+    /** 胶囊线宽归一：占轮廓高 8–18%。 */
+    fun resolveCapsuleStroke(raw: Int): Int = raw.coerceIn(8, 18)
+
+    /** 胶囊内左右边距归一：占轮廓高 2–20%。 */
+    fun resolveCapsuleMarginH(raw: Int): Int = raw.coerceIn(2, 20)
+
+    /** 胶囊内上下边距归一：占轮廓高 10–26%。 */
+    fun resolveCapsuleMarginV(raw: Int): Int = raw.coerceIn(10, 26)
+
+    /**
+     * 胶囊整体宽高比（含描边）。
+     *
+     * 参考 HyperDuo 胶囊：轮廓 138×59、圆角 29.5、描边默认 = 圆环描边×0.53≈7.42（13%）；
+     * 宽度随长度 [length] 与线宽 [strokePct] 变化。View 宽度 = 高度 × 本比例。
+     */
+    fun capsuleAspect(length: Int, strokePct: Int): Float {
+        val stroke = 59f * resolveCapsuleStroke(strokePct) / 100f
+        return (138f + resolveCapsuleLength(length) + stroke) / (59f + stroke)
     }
 }

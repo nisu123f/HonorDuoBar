@@ -60,6 +60,12 @@ object FeatureStore {
             val editor = service.getRemotePreferences(FeatureCatalog.REMOTE_GROUP).edit()
             FeatureCatalog.features.forEach { editor.putBoolean(it.key, isEnabled(it.key)) }
             editor.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_SIZE, trioSize())
+            editor.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_STYLE, trioStyle())
+            editor.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_LENGTH, capsuleLength())
+            editor.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_HEIGHT, capsuleHeight())
+            editor.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_STROKE, capsuleStroke())
+            editor.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_MARGIN_H, capsuleMarginH())
+            editor.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_MARGIN_V, capsuleMarginV())
             editor.putInt(FeatureCatalog.KEY_SYSTEMUI_CLOCK_MODE, clockMode())
             editor.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_BT_BATTERY, btBatteryMode())
             editor.apply()
@@ -89,6 +95,133 @@ object FeatureStore {
             true
         }.getOrElse { t ->
             XLog.log(Log.WARN, TAG, "远端尺寸下发失败", t)
+            false
+        }
+    }
+
+    /** 三合一字形样式：0=圆环，1=胶囊。 */
+    fun trioStyle(): Int {
+        val p = prefs ?: return FeatureCatalog.defaultTrioStyle()
+        return FeatureCatalog.resolveTrioStyle(
+            runCatching {
+                p.getInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_STYLE, FeatureCatalog.defaultTrioStyle())
+            }.getOrDefault(FeatureCatalog.defaultTrioStyle()),
+        )
+    }
+
+    fun setTrioStyle(value: Int): Boolean {
+        prefs?.edit()?.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_STYLE, value)?.apply()
+        val service = FrameworkState.current() ?: run {
+            XLog.log(Log.WARN, TAG, "LSPosed 未连接，三合一字形样式只写入本地")
+            return false
+        }
+        return runCatching {
+            service.getRemotePreferences(FeatureCatalog.REMOTE_GROUP).edit()
+                .putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_STYLE, value)
+                .apply()
+            true
+        }.getOrElse { t ->
+            XLog.log(Log.WARN, TAG, "远端三合一字形样式写入失败", t)
+            false
+        }
+    }
+
+    /** 胶囊长度：设计单位 -30–60，0 为参考长度。 */
+    fun capsuleLength(): Int {
+        val p = prefs ?: return FeatureCatalog.defaultCapsuleLength()
+        return FeatureCatalog.resolveCapsuleLength(
+            runCatching {
+                p.getInt(
+                    FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_LENGTH,
+                    FeatureCatalog.defaultCapsuleLength(),
+                )
+            }.getOrDefault(FeatureCatalog.defaultCapsuleLength()),
+        )
+    }
+
+    fun setCapsuleLength(value: Int): Boolean {
+        val normalized = FeatureCatalog.resolveCapsuleLength(value)
+        prefs?.edit()?.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_LENGTH, normalized)?.apply()
+        return pushInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_LENGTH, normalized, "胶囊长度")
+    }
+
+    /** 胶囊高度（dp，14–26）。 */
+    fun capsuleHeight(): Int {
+        val p = prefs ?: return FeatureCatalog.defaultCapsuleHeight()
+        return FeatureCatalog.resolveCapsuleHeight(
+            runCatching {
+                p.getInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_HEIGHT, FeatureCatalog.defaultCapsuleHeight())
+            }.getOrDefault(FeatureCatalog.defaultCapsuleHeight()),
+        )
+    }
+
+    fun setCapsuleHeight(value: Int): Boolean {
+        val normalized = FeatureCatalog.resolveCapsuleHeight(value)
+        prefs?.edit()?.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_HEIGHT, normalized)?.apply()
+        return pushInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_HEIGHT, normalized, "胶囊高度")
+    }
+
+    /** 胶囊线宽（占轮廓高百分比，8–18）。 */
+    fun capsuleStroke(): Int {
+        val p = prefs ?: return FeatureCatalog.defaultCapsuleStroke()
+        return FeatureCatalog.resolveCapsuleStroke(
+            runCatching {
+                p.getInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_STROKE, FeatureCatalog.defaultCapsuleStroke())
+            }.getOrDefault(FeatureCatalog.defaultCapsuleStroke()),
+        )
+    }
+
+    fun setCapsuleStroke(value: Int): Boolean {
+        val normalized = FeatureCatalog.resolveCapsuleStroke(value)
+        prefs?.edit()?.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_STROKE, normalized)?.apply()
+        return pushInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_STROKE, normalized, "胶囊线宽")
+    }
+
+    /** 胶囊内左右边距（占轮廓高百分比，2–20）。 */
+    fun capsuleMarginH(): Int {
+        val p = prefs ?: return FeatureCatalog.defaultCapsuleMarginH()
+        return FeatureCatalog.resolveCapsuleMarginH(
+            runCatching {
+                p.getInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_MARGIN_H, FeatureCatalog.defaultCapsuleMarginH())
+            }.getOrDefault(FeatureCatalog.defaultCapsuleMarginH()),
+        )
+    }
+
+    fun setCapsuleMarginH(value: Int): Boolean {
+        val normalized = FeatureCatalog.resolveCapsuleMarginH(value)
+        prefs?.edit()?.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_MARGIN_H, normalized)?.apply()
+        return pushInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_MARGIN_H, normalized, "胶囊内左右边距")
+    }
+
+    /** 胶囊内上下边距（占轮廓高百分比，10–26）。 */
+    fun capsuleMarginV(): Int {
+        val p = prefs ?: return FeatureCatalog.defaultCapsuleMarginV()
+        return FeatureCatalog.resolveCapsuleMarginV(
+            runCatching {
+                p.getInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_MARGIN_V, FeatureCatalog.defaultCapsuleMarginV())
+            }.getOrDefault(FeatureCatalog.defaultCapsuleMarginV()),
+        )
+    }
+
+    fun setCapsuleMarginV(value: Int): Boolean {
+        val normalized = FeatureCatalog.resolveCapsuleMarginV(value)
+        prefs?.edit()?.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_MARGIN_V, normalized)?.apply()
+        return pushInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_CAPSULE_MARGIN_V, normalized, "胶囊内上下边距")
+    }
+
+    /** 单个 int 配置的远端下发（本地已写入）。 */
+    private fun pushInt(key: String, value: Int, label: String): Boolean {
+        val service = FrameworkState.current() ?: run {
+            XLog.log(Log.WARN, TAG, "LSPosed 未连接，${label}只写入本地")
+            return false
+        }
+        return runCatching {
+            service.getRemotePreferences(FeatureCatalog.REMOTE_GROUP).edit()
+                .putInt(key, value)
+                .apply()
+            true
+        }.getOrElse { t ->
+            XLog.log(Log.WARN, TAG, "远端${label}写入失败", t)
             false
         }
     }

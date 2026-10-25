@@ -2,7 +2,12 @@ package io.github.nisu123f.honorduobar.ui
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
@@ -36,6 +41,10 @@ class MainActivity : Activity() {
     private lateinit var sizeRow: LinearLayout
     private lateinit var clockValue: TextView
     private lateinit var btStyleValue: TextView
+    private lateinit var styleRow: LinearLayout
+    private lateinit var styleValue: TextView
+    private lateinit var capsuleSettingsRow: LinearLayout
+    private lateinit var capsuleSettingsValue: TextView
     private val switches = HashMap<String, Switch>()
     private val listeners = ArrayList<() -> Unit>()
 
@@ -57,7 +66,7 @@ class MainActivity : Activity() {
 
         root.addView(buildStatusCard())
         root.addView(sectionTitle("状态栏"))
-        root.addView(buildCard(featureRows { it.key !in notifCenterKeys && it.key !in controlCenterKeys && it.key !in capsuleKeys } + buildClockRow() + buildSizeRow() + buildBtStyleRow()))
+        root.addView(buildCard(featureRows { it.key !in notifCenterKeys && it.key !in controlCenterKeys && it.key !in capsuleKeys } + buildClockRow() + buildStyleRow() + buildCapsuleSettingsRow() + buildSizeRow() + buildBtStyleRow()))
         root.addView(sectionTitle("灵动胶囊"))
         root.addView(buildCard(featureRows { it.key in capsuleKeys }))
         root.addView(sectionTitle("通知中心"))
@@ -312,6 +321,213 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun buildStyleRow(): View {
+        styleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, dp(12))
+            setOnClickListener { showStyleDialog() }
+        }
+        val texts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        texts.addView(TextView(this).apply {
+            text = "三合一图标样式"
+            setTextColor(colorText)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        })
+        texts.addView(TextView(this).apply {
+            text = "圆环：圆形电量环 + 环内 Wi-Fi/制式 + 底部信号点。胶囊：胶囊轮廓即电量，左格 Wi-Fi/制式、右格电量数字，上/下边缘为主卡/副卡信号点。需先开启「状态栏三合一」，改动后需重启系统界面生效。"
+            setTextColor(colorSub)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setPadding(0, dp(3), dp(12), 0)
+            setLineSpacing(dp(2).toFloat(), 1f)
+        })
+        styleRow.addView(texts)
+        styleValue = TextView(this).apply {
+            setTextColor(colorAccent)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        }
+        styleRow.addView(styleValue)
+        updateStyleText()
+        return styleRow
+    }
+
+    private fun styleLabel(style: Int): String = if (style == STYLE_CAPSULE) "胶囊" else "圆环"
+
+    private fun updateStyleText() {
+        styleValue.text = "${styleLabel(FeatureStore.trioStyle())} ›"
+    }
+
+    private fun showStyleDialog() {
+        if (switches[FeatureCatalog.KEY_SYSTEMUI_TRIO]?.isChecked != true) {
+            toast("请先开启「状态栏三合一」")
+            return
+        }
+        val labels = arrayOf("圆环", "胶囊")
+        val current = FeatureStore.trioStyle().coerceIn(0, labels.size - 1)
+        AlertDialog.Builder(this)
+            .setTitle("三合一图标样式")
+            .setSingleChoiceItems(labels, current) { dialog, which ->
+                val pushed = FeatureStore.setTrioStyle(which)
+                updateStyleText()
+                renderDependency()
+                if (!pushed) toast("已保存到本地，但 LSPosed 未连接，本次改动不会下发")
+                dialog.dismiss()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    /** 「胶囊样式设置」入口行：胶囊详细参数（预览 + 滑块）折叠在此行点开的设置弹窗内。 */
+    private fun buildCapsuleSettingsRow(): View {
+        capsuleSettingsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, dp(12))
+            setOnClickListener { showCapsuleSettingsDialog() }
+        }
+        val texts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        texts.addView(TextView(this).apply {
+            text = "胶囊样式设置"
+            setTextColor(colorText)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        })
+        texts.addView(TextView(this).apply {
+            text = "胶囊预览与长度/高度/线宽/内边距调节；仅胶囊样式生效，改动需重启系统界面后在状态栏生效。"
+            setTextColor(colorSub)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setPadding(0, dp(3), dp(12), 0)
+            setLineSpacing(dp(2).toFloat(), 1f)
+        })
+        capsuleSettingsRow.addView(texts)
+        capsuleSettingsValue = TextView(this).apply {
+            setTextColor(colorAccent)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        }
+        capsuleSettingsRow.addView(capsuleSettingsValue)
+        updateCapsuleSettingsText()
+        return capsuleSettingsRow
+    }
+
+    /** 当前胶囊高度 + 长度 + 线宽对应的实际宽度（dp）。 */
+    private fun capsuleWidthDp(length: Int): Int {
+        val h = FeatureCatalog.resolveCapsuleHeight(FeatureStore.capsuleHeight())
+        return (h * FeatureCatalog.capsuleAspect(length, FeatureStore.capsuleStroke()) + 0.5f).toInt()
+    }
+
+    private fun updateCapsuleSettingsText() {
+        val height = FeatureCatalog.resolveCapsuleHeight(FeatureStore.capsuleHeight())
+        capsuleSettingsValue.text = "${capsuleWidthDp(FeatureStore.capsuleLength())}×${height}dp ›"
+    }
+
+    /**
+     * 胶囊样式设置弹窗（折叠的详细设置页）：顶部实时预览，
+     * 下方长度/高度/线宽/左右边距/上下边距滑块，拖动即保存并刷新预览。
+     */
+    private fun showCapsuleSettingsDialog() {
+        if (switches[FeatureCatalog.KEY_SYSTEMUI_TRIO]?.isChecked != true) {
+            toast("请先开启「状态栏三合一」")
+            return
+        }
+        if (FeatureStore.trioStyle() != STYLE_CAPSULE) {
+            toast("请先把「三合一图标样式」设为胶囊")
+            return
+        }
+        var warned = false
+        val saveParam: ((Int) -> Boolean, Int) -> Unit = { setter, v ->
+            if (!setter(v) && !warned) {
+                warned = true
+                toast("已保存到本地，但 LSPosed 未连接，本次改动不会下发")
+            }
+            updateCapsuleSettingsText()
+        }
+        val preview = CapsulePreviewView(this)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(4), dp(20), 0)
+        }
+        box.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(0, dp(12), 0, dp(16))
+            addView(preview)
+        })
+
+        /** 弹窗内滑块行：标题 + 当前值一行、下面 SeekBar；拖动即保存并刷新预览。 */
+        fun slider(
+            label: String,
+            min: Int,
+            max: Int,
+            getter: () -> Int,
+            format: (Int) -> String,
+            setter: (Int) -> Boolean,
+        ) {
+            val item = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            head.addView(TextView(this).apply {
+                text = label
+                setTextColor(colorText)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            val valueText = TextView(this).apply {
+                setTextColor(colorAccent)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                text = format(getter())
+            }
+            head.addView(valueText)
+            item.addView(head)
+            item.addView(SeekBar(this).apply {
+                this.max = max - min
+                progress = (getter() - min).coerceIn(0, this.max)
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                        if (!fromUser) return
+                        val v = min + progress
+                        valueText.text = format(v)
+                        saveParam(setter, v)
+                        preview.refresh()
+                    }
+                    override fun onStartTrackingTouch(sb: SeekBar?) = Unit
+                    override fun onStopTrackingTouch(sb: SeekBar?) = Unit
+                })
+            })
+            box.addView(item)
+        }
+
+        slider(
+            "长度（设计单位）", CAPSULE_LEN_MIN, CAPSULE_LEN_MAX,
+            { FeatureStore.capsuleLength() }, { v -> "${capsuleWidthDp(v)}dp 宽" },
+        ) { v -> FeatureStore.setCapsuleLength(v) }
+        slider(
+            "胶囊高度", CAP_HEIGHT_MIN, CAP_HEIGHT_MAX,
+            { FeatureStore.capsuleHeight() }, { v -> "$v dp" },
+        ) { v -> FeatureStore.setCapsuleHeight(v) }
+        slider(
+            "胶囊线宽", CAP_STROKE_MIN, CAP_STROKE_MAX,
+            { FeatureStore.capsuleStroke() }, { v -> "$v%" },
+        ) { v -> FeatureStore.setCapsuleStroke(v) }
+        slider(
+            "内部左右边距", CAP_MARGIN_H_MIN, CAP_MARGIN_H_MAX,
+            { FeatureStore.capsuleMarginH() }, { v -> "$v%" },
+        ) { v -> FeatureStore.setCapsuleMarginH(v) }
+        slider(
+            "内部上下边距", CAP_MARGIN_V_MIN, CAP_MARGIN_V_MAX,
+            { FeatureStore.capsuleMarginV() }, { v -> "$v%" },
+        ) { v -> FeatureStore.setCapsuleMarginV(v) }
+
+        AlertDialog.Builder(this)
+            .setTitle("胶囊样式设置")
+            .setView(box)
+            .setPositiveButton("完成") { _, _ -> updateCapsuleSettingsText() }
+            .show()
+    }
+
     private fun buildSizeRow(): View {
         sizeRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -463,6 +679,8 @@ class MainActivity : Activity() {
         }
         if (this::clockValue.isInitialized) updateClockText()
         if (this::btStyleValue.isInitialized) updateBtStyleText()
+        if (this::styleValue.isInitialized) updateStyleText()
+        if (this::capsuleSettingsValue.isInitialized) updateCapsuleSettingsText()
         renderDependency()
     }
 
@@ -478,8 +696,17 @@ class MainActivity : Activity() {
             }
         }
         val trio = switches[FeatureCatalog.KEY_SYSTEMUI_TRIO]?.isChecked ?: false
+        val capsule = trio && FeatureStore.trioStyle() == STYLE_CAPSULE
         if (this::sizeRow.isInitialized) {
-            sizeRow.alpha = if (trio) 1f else 0.4f
+            // 尺寸滑块只管圆环；胶囊用独立的「胶囊高度」
+            sizeRow.alpha = if (trio && !capsule) 1f else 0.4f
+        }
+        if (this::styleRow.isInitialized) {
+            styleRow.alpha = if (trio) 1f else 0.4f
+        }
+        // 胶囊详细设置折叠为「胶囊样式设置」入口行：仅胶囊样式下显示
+        if (this::capsuleSettingsRow.isInitialized) {
+            capsuleSettingsRow.visibility = if (capsule) View.VISIBLE else View.GONE
         }
     }
 
@@ -499,9 +726,163 @@ class MainActivity : Activity() {
             if (stroke != 0) setStroke(dp(1), stroke)
         }
 
+    /**
+     * 胶囊预览：按当前设置（长度/高度/线宽/内部边距）以真实 dp 尺寸绘制样例，
+     * 与 hook 侧 TrioView 的胶囊几何同公式；固定样例状态：电量 100、5G、
+     * 单卡 3 格（顶部闭合、下开口信号点）、未充电。
+     */
+    private inner class CapsulePreviewView(context: android.content.Context) : View(context) {
+
+        private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+        }
+        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textAlign = Paint.Align.RIGHT
+            typeface = Typeface.create("sans-serif", Typeface.BOLD)
+        }
+        private val path = Path()
+        private val arcRect = RectF()
+        private val textBounds = Rect()
+
+        fun refresh() {
+            requestLayout()
+            invalidate()
+        }
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val heightPx = dp(FeatureCatalog.resolveCapsuleHeight(FeatureStore.capsuleHeight()))
+            val aspect = FeatureCatalog.capsuleAspect(
+                FeatureStore.capsuleLength(),
+                FeatureStore.capsuleStroke(),
+            )
+            setMeasuredDimension((heightPx * aspect + 0.5f).toInt(), heightPx)
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val fg = colorText
+            val track = (fg and 0x00FFFFFF) or (56 shl 24)
+
+            // 与 TrioView 胶囊几何同公式（设计空间轮廓 138×59）
+            val stroke = 59f * FeatureStore.capsuleStroke() / 100f
+            val dotR = stroke * 0.5f
+            val dotReach = PITCH * 1.5f + dotR + CLEARANCE + stroke * 0.5f
+            val inkLeft = LEFT - stroke * 0.5f
+            val inkTop = TOP - stroke * 0.5f
+            val inkH = 59f + stroke
+            val inset = 59f * FeatureStore.capsuleMarginH() / 100f
+            val interiorLeft = LEFT + stroke * 0.5f
+            val interiorTop = TOP + stroke * 0.5f + dotR
+            val interiorBottom = BOTTOM - stroke * 0.5f - dotR
+            val interiorCy = (interiorTop + interiorBottom) * 0.5f
+            // 元素字高 = 内腔高 − 上下边距，与 TrioView 同公式
+            val textCap = (
+                (interiorBottom - interiorTop) -
+                    2f * 59f * FeatureStore.capsuleMarginV() / 100f
+                ).coerceAtLeast(8f)
+            val right = RIGHT_REF + FeatureCatalog.resolveCapsuleLength(FeatureStore.capsuleLength())
+            val cx = (LEFT + right) * 0.5f
+            val inkW = right - LEFT + stroke
+            val reach = minOf(dotReach, cx - LEFT - RADIUS)
+
+            val scale = height / inkH
+            if (scale <= 0f) return
+            val save = canvas.save()
+            canvas.translate((width - inkW * scale) * 0.5f, (height - inkH * scale) * 0.5f)
+            canvas.scale(scale, scale)
+            canvas.translate(-inkLeft, -inkTop)
+
+            // 轮廓轨道（单卡样例：顶部闭合、底部开口）
+            val k = 0.55228475f * RADIUS
+            val cy = (TOP + BOTTOM) * 0.5f
+            path.reset()
+            path.moveTo(cx - reach, BOTTOM)
+            path.lineTo(LEFT + RADIUS, BOTTOM)
+            path.cubicTo(LEFT + RADIUS - k, BOTTOM, LEFT, cy + k, LEFT, cy)
+            path.cubicTo(LEFT, cy - k, LEFT + RADIUS - k, TOP, LEFT + RADIUS, TOP)
+            path.lineTo(right - RADIUS, TOP)
+            path.cubicTo(right - RADIUS + k, TOP, right, cy - k, right, cy)
+            path.cubicTo(right, cy + k, right - RADIUS + k, BOTTOM, right - RADIUS, BOTTOM)
+            path.lineTo(cx + reach, BOTTOM)
+            strokePaint.strokeWidth = stroke
+            strokePaint.color = track
+            canvas.drawPath(path, strokePaint)
+
+            // 电量填充 100%：整条轮廓点亮
+            strokePaint.color = fg
+            canvas.drawPath(path, strokePaint)
+
+            // 信号点：单卡样例 = 下开口 3 格（顶部闭合不画）
+            val firstX = cx - PITCH * 1.5f
+            for (i in 0 until 4) {
+                fillPaint.color = if (i < 3) fg else track
+                canvas.drawCircle(firstX + i * PITCH, BOTTOM, dotR, fillPaint)
+            }
+
+            // 左格 5G 文字（与 TrioView drawCapsuleLeft 同锚点同字体，制式文字 0.82 档）
+            val textSize = textCap / 0.71f
+            textPaint.color = fg
+            textPaint.textSize = textSize * 0.82f
+            textPaint.typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            textPaint.textAlign = Paint.Align.LEFT
+            textPaint.getTextBounds("5G", 0, 2, textBounds)
+            canvas.drawText(
+                "5G",
+                interiorLeft + inset,
+                interiorCy - (textBounds.top + textBounds.bottom) / 2f,
+                textPaint,
+            )
+
+            // 右格电量数字
+            val text = "100"
+            textPaint.textSize = textSize
+            textPaint.typeface = Typeface.create("sans-serif", Typeface.BOLD)
+            textPaint.textAlign = Paint.Align.RIGHT
+            textPaint.getTextBounds(text, 0, text.length, textBounds)
+            canvas.drawText(
+                text,
+                right - stroke * 0.5f - inset,
+                interiorCy - (textBounds.top + textBounds.bottom) / 2f,
+                textPaint,
+            )
+
+            canvas.restoreToCount(save)
+        }
+    }
+
     private companion object {
         const val SIZE_MIN = 18
         const val SIZE_MAX = 26
+
+        /** 胶囊样式（与 FeatureCatalog.resolveTrioStyle 的 0/1 对应）。 */
+        const val STYLE_CAPSULE = 1
+
+        /** 胶囊长度滑块范围（设计单位）。 */
+        const val CAPSULE_LEN_MIN = -30
+        const val CAPSULE_LEN_MAX = 60
+
+        /** 胶囊参数滑块范围：高度 dp、线宽 %、左右边距 %、上下边距 %（与 FeatureCatalog 归一范围一致）。 */
+        const val CAP_HEIGHT_MIN = 14
+        const val CAP_HEIGHT_MAX = 26
+        const val CAP_STROKE_MIN = 8
+        const val CAP_STROKE_MAX = 18
+        const val CAP_MARGIN_H_MIN = 2
+        const val CAP_MARGIN_H_MAX = 20
+        const val CAP_MARGIN_V_MIN = 10
+        const val CAP_MARGIN_V_MAX = 26
+
+        /** 胶囊预览几何（与 TrioView 胶囊常量一致，设计空间轮廓 138×59）。 */
+        const val LEFT = 1f
+        const val RIGHT_REF = 139f
+        const val TOP = 1f
+        const val BOTTOM = 60f
+        const val RADIUS = 29.5f
+        const val PITCH = 10.9f
+        const val CLEARANCE = 5.31f
+        const val PI = 3.1415927f
+        const val RAD_TO_DEG = 57.29578f
 
         /** 「通知中心」分组的功能 key（列表顺序 = 卡内行顺序，铃铛是农历的父依赖须在前）。 */
         val notifCenterKeys = listOf(
