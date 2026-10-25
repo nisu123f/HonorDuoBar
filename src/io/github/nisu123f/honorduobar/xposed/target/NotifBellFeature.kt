@@ -37,7 +37,7 @@ object NotifBellFeature {
 
     fun install(module: XposedModule, param: XposedModuleInterface.PackageLoadedParam) {
         if (!RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_HIDE_NOTIF_BELL)) {
-            logDisabled(module, FeatureCatalog.KEY_SYSTEMUI_HIDE_NOTIF_BELL, JUDGE_PREFIX)
+            logDisabled(FeatureCatalog.KEY_SYSTEMUI_HIDE_NOTIF_BELL, JUDGE_PREFIX)
             return
         }
         val loader = param.defaultClassLoader

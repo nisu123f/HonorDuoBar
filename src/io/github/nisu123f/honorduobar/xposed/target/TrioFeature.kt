@@ -26,6 +26,7 @@ import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
 import io.github.nisu123f.honorduobar.FeatureCatalog
 import io.github.nisu123f.honorduobar.xposed.core.MountEngine
+import io.github.nisu123f.honorduobar.xposed.core.XLog
 import io.github.nisu123f.honorduobar.xposed.core.MountSession
 import io.github.nisu123f.honorduobar.xposed.data.RemoteConfig
 import java.lang.ref.WeakReference
@@ -173,15 +174,6 @@ object TrioFeature {
 
     /** HnPanelViewControllerImpl.mPanelView 字段缓存（指向 NotificationPanelView）。 */
     @Volatile private var controllerPanelField: Field? = null
-    /** install 时缓存的 module 引用，供对象级回调写 LSPosed 模块日志。 */
-    @Volatile private var logModule: XposedModule? = null
-
-    /** 诊断日志（模块日志可见；module 未就绪时退化 logcat）。受「诊断日志」全局开关门控。 */
-    private fun logDiag(priority: Int, msg: String) {
-        if (!RemoteConfig.isEnabled(FeatureCatalog.KEY_DEBUG_LOG)) return
-        logModule?.log(priority, MountEngine.TAG, "$JUDGE_PREFIX $msg")
-            ?: Log.i(MountEngine.TAG, "$JUDGE_PREFIX $msg")
-    }
     /** 收起归零轮询状态（仅主线程）：收起信号后的目标控制器与已试次数。 */
     private var collapseSettleController: WeakReference<Any>? = null
     private var collapseSettleAttempts = 0
@@ -199,13 +191,13 @@ object TrioFeature {
                 collapseSettleController = null
                 if (panelExpanded) {
                     panelExpanded = false
-                    logDiag(Log.INFO, "面板收起(轮询兜底): fraction=$fraction → 恢复三合一 hosts=${injectedHosts.size}")
+                    XLog.diag(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX 面板收起(轮询兜底): fraction=$fraction → 恢复三合一 hosts=${injectedHosts.size}")
                     applyPanelVisibility(false)
                 }
                 return
             }
             if (++collapseSettleAttempts >= 10) {
-                logDiag(Log.WARN, "面板收起轮询超时放弃: fraction=$fraction panelExpanded=$panelExpanded")
+                XLog.diag(Log.WARN, MountEngine.TAG, "$JUDGE_PREFIX 面板收起轮询超时放弃: fraction=$fraction panelExpanded=$panelExpanded")
                 collapseSettleController = null
                 return
             }
@@ -216,7 +208,7 @@ object TrioFeature {
     private fun scheduleCollapseSettle(controller: Any) {
         // 宿主收起流程会重复发 2-3 次 setPanelShowingType(0)，已有轮询在跑就直接复用，避免重复刷屏与重置计时。
         if (collapseSettleController != null) return
-        logDiag(Log.INFO, "收到收起信号 setPanelShowingType(0)，开始轮询归零 panelExpanded=$panelExpanded")
+        XLog.diag(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX 收到收起信号 setPanelShowingType(0)，开始轮询归零 panelExpanded=$panelExpanded")
         collapseSettleAttempts = 0
         collapseSettleController = WeakReference(controller)
         mainHandler.removeCallbacks(collapseSettleTask)
@@ -278,24 +270,17 @@ object TrioFeature {
         return runCatching { f.getInt(border) }.getOrNull() ?: 0
     }
 
-    /** 胶囊避让涉及的两组容器 id（惰性缓存：getIdentifier 字符串查表不适合高频调用）。 */
+    /** 胶囊避让涉及的两组容器 id（惰性缓存，同 hiddenIds）。 */
     private fun alphaGroupIds(context: Context): IntArray {
         alphaGroupIdCache?.let { return it }
-        val res = context.resources
-        val pkg = context.packageName
-        val resolved = ALPHA_GROUP_NAMES
-            .mapNotNull { res.getIdentifier(it, "id", pkg).takeIf { id -> id != 0 } }
-            .toIntArray()
-        alphaGroupIdCache = resolved
-        return resolved
+        return resolveIds(context, ALPHA_GROUP_NAMES).also { alphaGroupIdCache = it }
     }
 
     fun install(module: XposedModule, param: XposedModuleInterface.PackageLoadedParam) {
         if (!RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO)) {
-            logDisabled(module, FeatureCatalog.KEY_SYSTEMUI_TRIO, "SystemUiHook·U9")
+            logDisabled(FeatureCatalog.KEY_SYSTEMUI_TRIO, JUDGE_PREFIX)
             return
         }
-        logModule = module
         val loader = param.defaultClassLoader
         val session = MountEngine.open(
             "SystemUiHook·U9",
@@ -407,16 +392,14 @@ object TrioFeature {
             }
         }
         // 诊断：记录条件任务挂载状态（日志确认开关是否生效及挂载了哪些 hook）。
-        if (RemoteConfig.isEnabled(FeatureCatalog.KEY_DEBUG_LOG)) {
-            module.log(
-                Log.INFO,
-                MountEngine.TAG,
-                "$JUDGE_PREFIX 条件任务: btStyle=${RemoteConfig.int(FeatureCatalog.KEY_SYSTEMUI_TRIO_BT_BATTERY, 0)}," +
-                    " capsuleNoScale=${RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_CAPSULE_NO_SCALE)}," +
-                    " panelNative=${RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_PANEL_NATIVE_ICONS)}," +
-                    " 任务数=${pending.size}",
-            )
-        }
+        XLog.diag(
+            Log.INFO,
+            MountEngine.TAG,
+            "$JUDGE_PREFIX 条件任务: btStyle=${RemoteConfig.int(FeatureCatalog.KEY_SYSTEMUI_TRIO_BT_BATTERY, 0)}," +
+                " capsuleNoScale=${RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_CAPSULE_NO_SCALE)}," +
+                " panelNative=${RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_PANEL_NATIVE_ICONS)}," +
+                " 任务数=${pending.size}",
+        )
         session.attemptMount(pending, module, loader) { task -> mountOne(session, task, module, loader) }
     }
 
@@ -538,6 +521,15 @@ object TrioFeature {
     /** 胶囊避让会动 alpha 的两组容器（statusIcons 放蓝牙等状态图标，network_area_icons 放网络图标）。 */
     @Volatile private var alphaGroupIdCache: IntArray? = null
 
+    /** 资源名 → id 惰性解析（id 按包名解析，各宿主实例通用；调用方负责缓存结果）。 */
+    private fun resolveIds(context: Context, names: Array<String>): IntArray {
+        val res = context.resources
+        val pkg = context.packageName
+        return names.mapNotNull { name ->
+            res.getIdentifier(name, "id", pkg).takeIf { it != 0 }
+        }.toIntArray()
+    }
+
     /** 原生按胶囊边界把越界图标 alpha 置 0，这里把它们拉回可见（仅在三合一生效时）。 */
     private fun restoreIconAlpha(host: ViewGroup) {
         if (!RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_KEEP_ICONS)) return
@@ -565,15 +557,10 @@ object TrioFeature {
         applyBluetoothIconVisibility(host, expanded = false)
     }
 
-    /** 要隐藏的原生件 id（惰性缓存：getIdentifier 字符串查表不适合高频调用；id 按包名解析，各宿主实例通用）。 */
+    /** 要隐藏的原生件 id（除整组 signalIcons 与 battery 外，再兜底隐藏组内单件——个别版本会把单件挂到别的容器）。 */
     private fun hiddenIds(host: ViewGroup): IntArray {
         hiddenIdCache?.let { return it }
-        val res = host.context.resources
-        val pkg = host.context.packageName
-        // 除整组 signalIcons 与 battery 外，再兜底隐藏组内单件（个别版本会把单件挂到别的容器）
-        return HIDDEN_IDS.mapNotNull { name ->
-            res.getIdentifier(name, "id", pkg).takeIf { it != 0 }
-        }.toIntArray().also { hiddenIdCache = it }
+        return resolveIds(host.context, HIDDEN_IDS).also { hiddenIdCache = it }
     }
 
     /**
@@ -603,7 +590,7 @@ object TrioFeature {
         }
         if (expanded != panelExpanded) {
             panelExpanded = expanded
-            logDiag(Log.INFO, "面板状态切换(fraction钩子): expanded=$expanded fraction=$fraction hosts=${injectedHosts.size}")
+            XLog.diag(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX 面板状态切换(fraction钩子): expanded=$expanded fraction=$fraction hosts=${injectedHosts.size}")
             applyPanelVisibility(expanded)
         }
     }
@@ -644,7 +631,7 @@ object TrioFeature {
         try {
             setter.invoke(controller, false)
             policy.javaClass.getMethod("updateBluetooth").invoke(policy)
-            logDiag(Log.INFO, "已清理蓝牙电量图标粘滞态（无电量设备/未连接）")
+            XLog.diag(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX 已清理蓝牙电量图标粘滞态（无电量设备/未连接）")
         } finally {
             btClearing = false
         }
@@ -691,7 +678,7 @@ object TrioFeature {
                                         )
                                         .invoke(controller, rounded, address)
                                     policy.javaClass.getMethod("updateBluetooth").invoke(policy)
-                                    logDiag(Log.INFO, "蓝牙电量播种成功: level=$level")
+                                    XLog.diag(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX 蓝牙电量播种成功: level=$level")
                                 }
                             }
                         }
@@ -938,7 +925,7 @@ object TrioFeature {
         // 注入时面板已展开（如面板开着时 SystemUI 重启）：立即按当前面板状态切原生显隐。
         if (panelExpanded) runCatching { applyHostVisibility(host, true) }
         trioViews.add(WeakReference(view))
-        module.log(
+        XLog.log(
             Log.INFO,
             MountEngine.TAG,
             "$JUDGE_PREFIX 三合一已注入（system_icons=${systemIcons !== host}, " +
@@ -986,7 +973,6 @@ object TrioFeature {
             textAlign = Paint.Align.CENTER
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         }
-        private val arcRect = RectF()
         private val textBounds = Rect()
         private val bolt = Path().apply {
             moveTo(65f, 48f)
@@ -1262,8 +1248,7 @@ object TrioFeature {
         }
 
         private fun ringArc(canvas: Canvas, startDeg: Float, sweepDeg: Float) {
-            arcRect.set(B_CX - B_R, B_CY - B_R, B_CX + B_R, B_CY + B_R)
-            canvas.drawArc(arcRect, startDeg, sweepDeg, false, ringPaint)
+            canvas.drawArc(RING_OVAL, startDeg, sweepDeg, false, ringPaint)
         }
 
         private fun hasTopContent(): Boolean =
@@ -1276,21 +1261,17 @@ object TrioFeature {
                 return
             }
             if (config.showWifi && wifiLevel > 0) {
-                // 直接沿用原项目 Wi-Fi 的圆心/半径/起止角，整体上移进顶部缺口。
+                // Wi-Fi 几何已在 companion 烘焙 W_LIFT/W_SCALE，直接画，无 Canvas 矩阵操作。
                 ringPaint.color = fg
-                ringPaint.strokeWidth = 10f
-                val save = canvas.save()
-                canvas.translate(0f, W_LIFT)
-                canvas.scale(W_SCALE, W_SCALE, W_CX, W1_CY)
+                ringPaint.strokeWidth = WIFI_STROKE
                 if (wifiLevel >= 3) {
-                    arc(canvas, W_CX, W1_CY, W1_R, W1_START, W1_SWEEP)
+                    canvas.drawArc(W1_OVAL, W1_START, W1_SWEEP, false, ringPaint)
                 }
                 if (wifiLevel >= 2) {
-                    arc(canvas, W_CX, W2_CY, W2_R, W2_START, W2_SWEEP)
+                    canvas.drawArc(W2_OVAL, W2_START, W2_SWEEP, false, ringPaint)
                 }
                 signalPaint.color = fg
-                canvas.drawCircle(W_CX, W_DOT_Y, W_DOT_R, signalPaint)
-                canvas.restoreToCount(save)
+                canvas.drawCircle(W_CX, W_DOT_Y_BAKED, W_DOT_R_BAKED, signalPaint)
                 return
             }
             if (!config.showType || netType.isEmpty()) return
@@ -1312,14 +1293,13 @@ object TrioFeature {
                     textPaint.typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
                     drawTextCentred(canvas, bt.toString(), 60f, 108f)
                 } else {
-                    arcRect.set(B_CX - BT_R, B_CY - BT_R, B_CX + BT_R, B_CY + BT_R)
                     btLinePaint.color = fg
                     btLinePaint.alpha = TRACK_ALPHA
-                    canvas.drawArc(arcRect, BT_ARC_START, BT_ARC_SWEEP, false, btLinePaint)
+                    canvas.drawArc(BT_OVAL, BT_ARC_START, BT_ARC_SWEEP, false, btLinePaint)
                     if (bt > 0) {
                         val progress = BT_ARC_SWEEP * bt / 100f
                         btLinePaint.alpha = 255
-                        canvas.drawArc(arcRect, BT_ARC_START + BT_ARC_SWEEP - progress, progress, false, btLinePaint)
+                        canvas.drawArc(BT_OVAL, BT_ARC_START + BT_ARC_SWEEP - progress, progress, false, btLinePaint)
                     }
                 }
                 return
@@ -1367,11 +1347,6 @@ object TrioFeature {
             textPaint.getTextBounds(text, 0, text.length, textBounds)
             val baseline = cy - (textBounds.top + textBounds.bottom) / 2f
             canvas.drawText(text, cx, baseline, textPaint)
-        }
-
-        private fun arc(canvas: Canvas, cx: Float, cy: Float, r: Float, start: Float, sweep: Float) {
-            arcRect.set(cx - r, cy - r, cx + r, cy + r)
-            canvas.drawArc(arcRect, start, sweep, false, ringPaint)
         }
 
         private fun withAlpha(color: Int, alpha: Int): Int =
@@ -1437,6 +1412,22 @@ object TrioFeature {
             /** 把 Wi-Fi 组从环心位置整体上移进顶部缺口，并略微收小与数字拉开间距。 */
             const val W_LIFT = -40.5f
             const val W_SCALE = 0.92f
+            /** Wi-Fi 组烘焙 W_LIFT/W_SCALE 后的最终几何（缩放同时作用于描边，10f×W_SCALE），绘制零矩阵操作。 */
+            const val WIFI_STROKE = 10f * W_SCALE
+            const val W2_CY_BAKED = W1_CY + (W2_CY - W1_CY) * W_SCALE + W_LIFT
+            const val W_DOT_Y_BAKED = W1_CY + (W_DOT_Y - W1_CY) * W_SCALE + W_LIFT
+            const val W_DOT_R_BAKED = W_DOT_R * W_SCALE
+            /** 常量圆环的不可变 Oval（drawArc 只读，可多实例共享，免每帧 RectF.set）。 */
+            val RING_OVAL = RectF(B_CX - B_R, B_CY - B_R, B_CX + B_R, B_CY + B_R)
+            val BT_OVAL = RectF(B_CX - BT_R, B_CY - BT_R, B_CX + BT_R, B_CY + BT_R)
+            val W1_OVAL = RectF(
+                W_CX - W1_R * W_SCALE, W1_CY + W_LIFT - W1_R * W_SCALE,
+                W_CX + W1_R * W_SCALE, W1_CY + W_LIFT + W1_R * W_SCALE,
+            )
+            val W2_OVAL = RectF(
+                W_CX - W2_R * W_SCALE, W2_CY_BAKED - W2_R * W_SCALE,
+                W_CX + W2_R * W_SCALE, W2_CY_BAKED + W2_R * W_SCALE,
+            )
             const val COLOR_DANGER = 0xFFFF3B30.toInt()
             const val COLOR_LOW = 0xFFF2B900.toInt()
             const val COLOR_CHARGING = 0xFF34C759.toInt()

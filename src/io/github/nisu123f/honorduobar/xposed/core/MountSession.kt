@@ -49,7 +49,7 @@ class MountSession internal constructor(
         if (!MountScheduler.handler.looper.isCurrentThread) {
             MountScheduler.postDelayed(0) {
                 runCatching { attemptMount(pending, module, loader, mountOne) }
-                    .onFailure { t -> module.log(Log.ERROR, MountEngine.TAG, "$hookName 挂载调度异常", t) }
+                    .onFailure { t -> XLog.log(Log.ERROR, MountEngine.TAG, "$hookName 挂载调度异常", t) }
             }
             return
         }
@@ -75,7 +75,7 @@ class MountSession internal constructor(
         for (task in eligible) {
             // per-task try/catch 隔离：单任务异常不阻断同批其他任务，汇总行始终输出
             val result = runCatching { mountOne(task) }.getOrElse {
-                module.log(Log.ERROR, MountEngine.TAG, "$hookName 挂载异常（任务隔离）: ${task.description}", it)
+                XLog.log(Log.ERROR, MountEngine.TAG, "$hookName 挂载异常（任务隔离）: ${task.description}", it)
                 MountEngine.Result.FAILED
             }
             if (result == MountEngine.Result.NOT_RESOLVED) {
@@ -88,24 +88,24 @@ class MountSession internal constructor(
             }
         }
         if (unresolved.isEmpty()) {
-            logSummary(module)
+            logSummary()
             return
         }
         if (retryRounds >= MountEngine.MAX_RETRY_ROUNDS) {
             unresolved.forEach { u -> summary.markUnmounted(u.description, u.group) }
-            module.log(
+            XLog.log(
                 Log.WARN, MountEngine.TAG,
                 "$hookName 部分 hook 最终未挂载（类/方法不存在，已重试 ${MountEngine.MAX_RETRY_ROUNDS} 轮，放弃）: " +
                     unresolved.joinToString { it.description },
             )
-            logSummary(module)
+            logSummary()
             return
         }
         retryRounds++
         val delay = if (retryRounds == 1) MountEngine.RETRY_DELAY_MS else MountEngine.RETRY_FINAL_DELAY_MS
         MountScheduler.postDelayed(delay) {
             runCatching { attemptMount(unresolved, module, loader, mountOne) }
-                .onFailure { t -> module.log(Log.ERROR, MountEngine.TAG, "$hookName 懒加载重试挂载异常", t) }
+                .onFailure { t -> XLog.log(Log.ERROR, MountEngine.TAG, "$hookName 懒加载重试挂载异常", t) }
         }
     }
 
@@ -121,11 +121,11 @@ class MountSession internal constructor(
         // 依赖项未就绪（NOT_RESOLVED，可随类加载重试），不能冒泡成挂载异常 → FAILED（重试无意义）。
         task.resolveValue?.let { resolveValue ->
             val resolved = runCatching { resolveValue(loader) }.getOrElse {
-                module.log(Log.WARN, MountEngine.TAG, "hook 未挂载（依赖项未解析，将重试）: ${task.description} — ${it.message}")
+                XLog.log(Log.WARN, MountEngine.TAG, "hook 未挂载（依赖项未解析，将重试）: ${task.description} — ${it.message}")
                 return ResolveOutcome.Unresolved
             }
             if (resolved == null) {
-                module.log(Log.WARN, MountEngine.TAG, "hook 未挂载（依赖项未解析，将重试）: ${task.description}")
+                XLog.log(Log.WARN, MountEngine.TAG, "hook 未挂载（依赖项未解析，将重试）: ${task.description}")
                 return ResolveOutcome.Unresolved
             }
         }
@@ -140,13 +140,13 @@ class MountSession internal constructor(
             pointFeature = task.feature,
         )
         if (outcome is ResolveOutcome.Unresolved) {
-            module.log(Log.WARN, MountEngine.TAG, "hook 未挂载（类/方法不存在，版本差异，将重试）: ${task.description}")
+            XLog.log(Log.WARN, MountEngine.TAG, "hook 未挂载（类/方法不存在，版本差异，将重试）: ${task.description}")
         }
         return outcome
     }
 
     /** 挂载汇总始终输出，不受 [MountEngine.DEBUG_LOGGING] 门控（Rain "installed N/M" 汇总行模式，真机判据）。 */
-    fun logSummary(module: XposedModule) {
+    fun logSummary() {
         val hostPart = actualVersion?.let { "（宿主 $it）" } ?: ""
         // 通路汇总（存在非空 group 才输出；单行紧凑 "; " 拼接）。判读单位 = 功能点至少一条通路存活，
         // 全灭（ok=0）才升级 ERROR 附失败明细——部分存活是失效常态，不制造噪音。
@@ -156,7 +156,7 @@ class MountSession internal constructor(
                 MountLogLevel.WARN -> Log.WARN
                 MountLogLevel.ERROR -> Log.ERROR
             }
-            module.log(level, MountEngine.TAG, line.text)
+            XLog.log(level, MountEngine.TAG, line.text)
         }
     }
 
@@ -186,7 +186,7 @@ class MountSession internal constructor(
                 } else {
                     ""
                 }
-                module.log(
+                XLog.log(
                     Log.WARN,
                     MountEngine.TAG,
                     "$hookName 挂载点合并（与另一挂载点落到同一方法，只挂一次）: ${task.id} → " +
@@ -205,7 +205,7 @@ class MountSession internal constructor(
             } catch (t: Throwable) {
                 val n = callbackWarnCount.merge(task.id, 1) { a, b -> a + b } ?: 1
                 if (n <= MountEngine.CALLBACK_WARN_PER_TASK) {
-                    module.log(Log.WARN, MountEngine.TAG, "$hookName 回调异常（框架按 PROTECTIVE 继续，本行仅模块侧留痕）: ${task.id} — ${t.message}", t)
+                    XLog.log(Log.WARN, MountEngine.TAG, "$hookName 回调异常（框架按 PROTECTIVE 继续，本行仅模块侧留痕）: ${task.id} — ${t.message}", t)
                 }
                 throw t
             }
@@ -218,7 +218,7 @@ class MountSession internal constructor(
         }.fold(
             onSuccess = { MountEngine.Result.OK },
             onFailure = { t ->
-                module.log(Log.WARN, MountEngine.TAG, "hook 挂载失败（不阻断其他 hook）: ${task.description} — ${t.message}", t)
+                XLog.log(Log.WARN, MountEngine.TAG, "hook 挂载失败（不阻断其他 hook）: ${task.description} — ${t.message}", t)
                 MountEngine.Result.FAILED
             },
         )
@@ -233,7 +233,7 @@ class MountSession internal constructor(
         val n = judgeCount.merge(task.id, 1) { a, b -> a + b } ?: 1
         if (n <= MountEngine.JUDGE_LOG_PER_TASK) {
             val suffix = if (detail.isNullOrEmpty()) "" else "（$detail）"
-            module.log(Log.INFO, MountEngine.TAG, "$prefix 生效: ${task.id} — ${task.description}$suffix")
+            XLog.log(Log.INFO, MountEngine.TAG, "$prefix 生效: ${task.id} — ${task.description}$suffix")
         }
     }
 
@@ -253,8 +253,8 @@ class MountSession internal constructor(
             actualVersion = actual
             when {
                 actual == expectedHostVersion ->
-                    module.log(Log.INFO, MountEngine.TAG, "$hookName 宿主版本与 hook 基线一致: $actual")
-                else -> module.log(
+                    XLog.log(Log.INFO, MountEngine.TAG, "$hookName 宿主版本与 hook 基线一致: $actual")
+                else -> XLog.log(
                     Log.WARN, MountEngine.TAG,
                     "$hookName 宿主版本 $actual 与 hook 基线 $expectedHostVersion 不一致——挂载点可能漂移，" +
                         "判据以 installed N/M 与失败清单为准",

@@ -2,8 +2,10 @@ package io.github.nisu123f.honorduobar.xposed.target
 
 import android.icu.util.ChineseCalendar
 import io.github.libxposed.api.XposedInterface
+import android.util.Log
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
+import io.github.nisu123f.honorduobar.xposed.core.XLog
 import io.github.nisu123f.honorduobar.FeatureCatalog
 import io.github.nisu123f.honorduobar.xposed.core.MountEngine
 import io.github.nisu123f.honorduobar.xposed.core.MountSession
@@ -44,13 +46,13 @@ object ShadeLunarFeature {
 
     fun install(module: XposedModule, param: XposedModuleInterface.PackageLoadedParam) {
         if (!RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_SHADE_LUNAR)) {
-            logDisabled(module, FeatureCatalog.KEY_SYSTEMUI_SHADE_LUNAR, JUDGE_PREFIX)
+            logDisabled(FeatureCatalog.KEY_SYSTEMUI_SHADE_LUNAR, JUDGE_PREFIX)
             return
         }
         // 宽度前提：铃铛隐藏后日期行才够宽（dependsOn KEY_SYSTEMUI_HIDE_NOTIF_BELL）
         if (!RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_HIDE_NOTIF_BELL)) {
-            module.log(
-                android.util.Log.INFO, MountEngine.TAG,
+            XLog.log(
+                Log.INFO, MountEngine.TAG,
                 "$JUDGE_PREFIX 依赖的「隐藏通知中心铃铛按钮」未开启，跳过 hook: ${FeatureCatalog.KEY_SYSTEMUI_SHADE_LUNAR}",
             )
             return

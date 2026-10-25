@@ -48,7 +48,8 @@ object MethodResolver {
                     val picked = candidates.firstOrNull {
                         returnType == null || it.returnType.name == returnType
                     } ?: candidates[0]
-                    Log.w(
+                    XLog.log(
+                        Log.WARN,
                         TAG,
                         "直连反射命中 ${candidates.size} 个同名同参数量方法（$className#$methodName），" +
                             "paramTypes 锚点不足，取第一个: ${signatureOf(picked)}",
@@ -57,7 +58,7 @@ object MethodResolver {
                 }
             }
         }.onFailure { t ->
-            Log.w(TAG, "直连反射未命中 $className#$methodName（${t::class.java.simpleName}）", t)
+            XLog.log(Log.WARN, TAG, "直连反射未命中 $className#$methodName（${t::class.java.simpleName}）", t)
         }.getOrNull()
 
         if (method == null) return ResolveOutcome.Unresolved

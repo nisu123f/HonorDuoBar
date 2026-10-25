@@ -9,6 +9,7 @@ import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
 import io.github.nisu123f.honorduobar.FeatureCatalog
 import io.github.nisu123f.honorduobar.xposed.core.MountEngine
+import io.github.nisu123f.honorduobar.xposed.core.XLog
 import io.github.nisu123f.honorduobar.xposed.core.MountSession
 import io.github.nisu123f.honorduobar.xposed.data.RemoteConfig
 import java.lang.ref.WeakReference
@@ -67,7 +68,7 @@ object ClockFeature {
             param.applicationInfo?.sourceDir,
             FeatureCatalog.baselineVersionOf(HOST_PACKAGE),
         )
-        module.log(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX 时钟模式=$mode（0=不修改 1=隐藏 2=显秒）")
+        XLog.log(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX 时钟模式=$mode（0=不修改 1=隐藏 2=显秒）")
 
         // onAttachedToWindow 三种模式都要挂：不修改→还原残留显秒；隐藏→GONE；显秒→写设置
         val pending = ArrayList<MountEngine.SimpleTask>()
@@ -168,10 +169,10 @@ object ClockFeature {
         runCatching {
             if (current != target) {
                 Settings.Secure.putInt(resolver, "clock_seconds", target)
-                module.log(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX clock_seconds $current → $target")
+                XLog.log(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX clock_seconds $current → $target")
             }
         }.onFailure {
-            module.log(Log.WARN, MountEngine.TAG, "$JUDGE_PREFIX 写 clock_seconds=$target 失败: ${it.message}")
+            XLog.log(Log.WARN, MountEngine.TAG, "$JUDGE_PREFIX 写 clock_seconds=$target 失败: ${it.message}")
         }
         runCatching {
             val m = clock.javaClass.getDeclaredMethod(
@@ -182,7 +183,7 @@ object ClockFeature {
             m.invoke(clock, target)
         }.onFailure {
             // 方法缺失或反射被拒：仅靠 Settings 链路，最迟下次 SystemUI 重启生效
-            module.log(Log.WARN, MountEngine.TAG, "$JUDGE_PREFIX 反射调 onTimeDisplayPrecisionChange($target) 失败: ${it.message}")
+            XLog.log(Log.WARN, MountEngine.TAG, "$JUDGE_PREFIX 反射调 onTimeDisplayPrecisionChange($target) 失败: ${it.message}")
         }
     }
 
@@ -206,9 +207,9 @@ object ClockFeature {
         findClocks(root, hits)
         hits.forEach { track(it, module) }
         if (hits.isNotEmpty()) {
-            module.log(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX sweep 命中 ${hits.size} 个 HwStatusBarClock（OnPreDraw 已挂）")
+            XLog.log(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX sweep 命中 ${hits.size} 个 HwStatusBarClock（OnPreDraw 已挂）")
         } else {
-            module.log(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX sweep 未命中 HwStatusBarClock（宿主可能用的是其他 Clock 变体，当前只 hook HwStatusBarClock 本类）")
+            XLog.log(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX sweep 未命中 HwStatusBarClock（宿主可能用的是其他 Clock 变体，当前只 hook HwStatusBarClock 本类）")
         }
     }
 

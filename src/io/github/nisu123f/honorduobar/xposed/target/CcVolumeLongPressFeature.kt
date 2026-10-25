@@ -14,6 +14,7 @@ import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
 import io.github.nisu123f.honorduobar.FeatureCatalog
 import io.github.nisu123f.honorduobar.xposed.core.MountEngine
+import io.github.nisu123f.honorduobar.xposed.core.XLog
 import io.github.nisu123f.honorduobar.xposed.core.MountSession
 import io.github.nisu123f.honorduobar.xposed.data.RemoteConfig
 import java.lang.ref.WeakReference
@@ -69,7 +70,7 @@ object CcVolumeLongPressFeature {
 
     fun install(module: XposedModule, param: XposedModuleInterface.PackageLoadedParam) {
         if (!RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_CC_VOLUME_LONGPRESS)) {
-            logDisabled(module, FeatureCatalog.KEY_SYSTEMUI_CC_VOLUME_LONGPRESS, JUDGE_PREFIX)
+            logDisabled(FeatureCatalog.KEY_SYSTEMUI_CC_VOLUME_LONGPRESS, JUDGE_PREFIX)
             return
         }
         val loader = param.defaultClassLoader
@@ -126,7 +127,7 @@ object CcVolumeLongPressFeature {
                             Boolean::class.javaPrimitiveType,
                         )
                     }.getOrElse {
-                        module.log(Log.WARN, MountEngine.TAG, "$JUDGE_PREFIX 解析 create 方法失败: ${it.message}")
+                        XLog.log(Log.WARN, MountEngine.TAG, "$JUDGE_PREFIX 解析 create 方法失败: ${it.message}")
                         null
                     }
                 }
@@ -203,23 +204,19 @@ object CcVolumeLongPressFeature {
                 create.invoke(manager, pkg, true, null, null, true, Process.myUserHandle(), token, true)
                 true
             }.getOrElse {
-                module.log(Log.WARN, MountEngine.TAG, "$JUDGE_PREFIX 荣耀媒体弹窗调用失败: ${it.message}")
+                XLog.log(Log.WARN, MountEngine.TAG, "$JUDGE_PREFIX 荣耀媒体弹窗调用失败: ${it.message}")
                 false
             }
             if (ok) {
-                module.log(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX 长按音量条，已弹出荣耀媒体输出弹窗")
+                XLog.log(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX 长按音量条，已弹出荣耀媒体输出弹窗")
                 return
             }
         }
         runCatching {
             view.context.sendBroadcast(Intent(ACTION_MEDIA_OUTPUT).setPackage(HOST_PACKAGE))
-            module.log(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX 长按音量条，回退弹出系统媒体输出面板")
+            XLog.log(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX 长按音量条，回退弹出系统媒体输出面板")
         }.onFailure {
-            module.log(Log.WARN, MountEngine.TAG, "$JUDGE_PREFIX 弹出媒体输出面板失败: ${it.message}")
+            XLog.log(Log.WARN, MountEngine.TAG, "$JUDGE_PREFIX 弹出媒体输出面板失败: ${it.message}")
         }
-    }
-
-    private fun logDisabled(module: XposedModule, featureKey: String, prefix: String) {
-        module.log(Log.INFO, MountEngine.TAG, "$prefix 功能已关闭，跳过 hook: $featureKey")
     }
 }

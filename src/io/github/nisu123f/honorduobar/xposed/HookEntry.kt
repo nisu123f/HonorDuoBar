@@ -4,6 +4,7 @@ import android.util.Log
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
 import io.github.nisu123f.honorduobar.FeatureCatalog
+import io.github.nisu123f.honorduobar.xposed.core.XLog
 import io.github.nisu123f.honorduobar.xposed.data.RemoteConfig
 import io.github.nisu123f.honorduobar.xposed.target.SystemUiHook
 import java.util.concurrent.atomic.AtomicBoolean
@@ -20,12 +21,14 @@ class HookEntry : XposedModule() {
         if (param.packageName != FeatureCatalog.HOST_PACKAGE) return
         if (!installed.compareAndSet(false, true)) return
         runCatching {
+            // 统一日志门面登记（此后全模块日志写 LSPosed 模块日志，见 XLog）
+            XLog.attach(this)
             // 远端 prefs 缓存注入（一次 Binder 读取；读失败回 null = 按目录默认值）
             RemoteConfig.attach(runCatching { getRemotePreferences(FeatureCatalog.REMOTE_GROUP) }.getOrNull())
             SystemUiHook.install(this, param)
-            log(Log.INFO, TAG, "target installed: ${param.packageName}/SystemUiHook")
+            XLog.log(Log.INFO, TAG, "target installed: ${param.packageName}/SystemUiHook")
         }.onFailure { error ->
-            log(Log.ERROR, TAG, "target install failed for ${param.packageName}", error)
+            XLog.log(Log.ERROR, TAG, "target install failed for ${param.packageName}", error)
         }
     }
 

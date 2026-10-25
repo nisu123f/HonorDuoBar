@@ -7,6 +7,7 @@ import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
 import io.github.nisu123f.honorduobar.FeatureCatalog
 import io.github.nisu123f.honorduobar.xposed.core.MountEngine
+import io.github.nisu123f.honorduobar.xposed.core.XLog
 import io.github.nisu123f.honorduobar.xposed.core.MountSession
 import io.github.nisu123f.honorduobar.xposed.data.RemoteConfig
 import java.lang.ref.WeakReference
@@ -43,7 +44,7 @@ object ControlCenterFeature {
 
     fun install(module: XposedModule, param: XposedModuleInterface.PackageLoadedParam) {
         if (!RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_HIDE_CC_POWER)) {
-            logDisabled(module, FeatureCatalog.KEY_SYSTEMUI_HIDE_CC_POWER, JUDGE_PREFIX)
+            logDisabled(FeatureCatalog.KEY_SYSTEMUI_HIDE_CC_POWER, JUDGE_PREFIX)
             return
         }
         val loader = param.defaultClassLoader
@@ -81,18 +82,18 @@ object ControlCenterFeature {
             field.isAccessible = true
             field.get(header) as? View
         }.getOrElse {
-            module.log(Log.WARN, MountEngine.TAG, "$JUDGE_PREFIX 反射 $FIELD_POWER_BUTTON 失败: ${it.message}")
+            XLog.log(Log.WARN, MountEngine.TAG, "$JUDGE_PREFIX 反射 $FIELD_POWER_BUTTON 失败: ${it.message}")
             null
         } ?: return@Hooker null
-        hideAndTrack(btn, module)
+        hideAndTrack(btn)
         null
     })
 
     /** 立即置 GONE，并挂 OnPreDrawListener 每帧重申（防宿主回显）。 */
-    private fun hideAndTrack(btn: View, module: XposedModule) {
+    private fun hideAndTrack(btn: View) {
         if (btn.visibility != View.GONE) {
             btn.visibility = View.GONE
-            module.log(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX 已隐藏控制中心关机按钮")
+            XLog.log(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX 已隐藏控制中心关机按钮")
         }
         val key = System.identityHashCode(btn)
         if (tracked.putIfAbsent(key, WeakReference(btn)) != null) return
@@ -102,9 +103,5 @@ object ControlCenterFeature {
                 return true
             }
         })
-    }
-
-    private fun logDisabled(module: XposedModule, featureKey: String, prefix: String) {
-        module.log(Log.INFO, MountEngine.TAG, "$prefix 功能已关闭，跳过 hook: $featureKey")
     }
 }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import io.github.nisu123f.honorduobar.FeatureCatalog
+import io.github.nisu123f.honorduobar.xposed.core.XLog
 
 /**
  * 功能开关存储（宿主侧）——本地镜像 + 远端下发双写。
@@ -38,7 +39,7 @@ object FeatureStore {
     fun setEnabled(key: String, enabled: Boolean): Boolean {
         prefs?.edit()?.putBoolean(key, enabled)?.apply()
         val service = FrameworkState.current() ?: run {
-            Log.w(TAG, "LSPosed 未连接，开关只写入本地: $key")
+            XLog.log(Log.WARN, TAG, "LSPosed 未连接，开关只写入本地: $key")
             return false
         }
         return runCatching {
@@ -47,7 +48,7 @@ object FeatureStore {
             editor.apply()
             true
         }.getOrElse { t ->
-            Log.w(TAG, "远端 prefs 下发失败: $key", t)
+            XLog.log(Log.WARN, TAG, "远端 prefs 下发失败: $key", t)
             false
         }
     }
@@ -64,7 +65,7 @@ object FeatureStore {
             editor.apply()
             true
         }.getOrElse { t ->
-            Log.w(TAG, "远端 prefs 批量下发失败", t)
+            XLog.log(Log.WARN, TAG, "远端 prefs 批量下发失败", t)
             false
         }
     }
@@ -78,7 +79,7 @@ object FeatureStore {
     fun setTrioSize(value: Int): Boolean {
         prefs?.edit()?.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_SIZE, value)?.apply()
         val service = FrameworkState.current() ?: run {
-            Log.w(TAG, "LSPosed 未连接，尺寸只写入本地")
+            XLog.log(Log.WARN, TAG, "LSPosed 未连接，尺寸只写入本地")
             return false
         }
         return runCatching {
@@ -87,7 +88,7 @@ object FeatureStore {
             editor.apply()
             true
         }.getOrElse { t ->
-            Log.w(TAG, "远端尺寸下发失败", t)
+            XLog.log(Log.WARN, TAG, "远端尺寸下发失败", t)
             false
         }
     }
@@ -106,7 +107,7 @@ object FeatureStore {
     fun setClockMode(value: Int): Boolean {
         prefs?.edit()?.putInt(FeatureCatalog.KEY_SYSTEMUI_CLOCK_MODE, value)?.apply()
         val service = FrameworkState.current() ?: run {
-            Log.w(TAG, "LSPosed 未连接，时钟模式只写入本地")
+            XLog.log(Log.WARN, TAG, "LSPosed 未连接，时钟模式只写入本地")
             return false
         }
         return runCatching {
@@ -115,7 +116,7 @@ object FeatureStore {
             editor.apply()
             true
         }.getOrElse { t ->
-            Log.w(TAG, "远端时钟模式写入失败", t)
+            XLog.log(Log.WARN, TAG, "远端时钟模式写入失败", t)
             false
         }
     }
@@ -131,7 +132,7 @@ object FeatureStore {
     fun setBtBatteryMode(value: Int): Boolean {
         prefs?.edit()?.putInt(FeatureCatalog.KEY_SYSTEMUI_TRIO_BT_BATTERY, value)?.apply()
         val service = FrameworkState.current() ?: run {
-            Log.w(TAG, "LSPosed 未连接，蓝牙电量模式只写入本地")
+            XLog.log(Log.WARN, TAG, "LSPosed 未连接，蓝牙电量模式只写入本地")
             return false
         }
         return runCatching {
@@ -140,7 +141,7 @@ object FeatureStore {
                 .apply()
             true
         }.getOrElse { t ->
-            Log.w(TAG, "远端蓝牙电量模式写入失败", t)
+            XLog.log(Log.WARN, TAG, "远端蓝牙电量模式写入失败", t)
             false
         }
     }
