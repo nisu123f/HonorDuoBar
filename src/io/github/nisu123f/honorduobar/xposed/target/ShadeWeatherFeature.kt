@@ -442,7 +442,7 @@ object ShadeWeatherFeature {
                     if (queried != null) {
                         cache = queried
                         fetchedAt = System.currentTimeMillis()
-                        XLog.log(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX 天气刷新: ${queried.condition} ${queried.tempC}℃")
+                        XLog.diag(Log.INFO, MountEngine.TAG, "$JUDGE_PREFIX 天气刷新: ${queried.condition} ${queried.tempC}℃")
                     }
                 } catch (_: Throwable) {
                 } finally {

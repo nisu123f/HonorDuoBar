@@ -1060,20 +1060,23 @@ object TrioFeature {
         }
 
         // ---- 胶囊样式几何（轮廓 138×59 设计单位，参考 HyperDuo） ----
-        // 线宽（占轮廓高 %）与内部元素字高（占轮廓高 %）可在设置页调整，几何随配置派生。
-        private val capStroke = (CAP_BOTTOM - CAP_TOP) * config.capsuleStrokePct / 100f
+        // 所有几何参数都有边界保护，即使极端配置也不会产生 NaN/Infinity/负数坐标。
+        private val capStroke = ((CAP_BOTTOM - CAP_TOP) * config.capsuleStrokePct / 100f)
+            .coerceIn(2f, 30f)
         /** 信号点半径 = 半个线宽：4 颗点读作「描边串起的珠子」，与线宽同步。 */
-        private val capDotR = capStroke * 0.5f
+        private val capDotR = (capStroke * 0.5f).coerceAtLeast(0.5f)
         /** 单个开口切深：4 点半跨 + 点半径 + 留白 + 半个描边。 */
         private val capDotReach =
-            CAP_DOT_PITCH * 1.5f + capDotR + CAP_DOT_CLEARANCE + capStroke * 0.5f
+            (CAP_DOT_PITCH * 1.5f + capDotR + CAP_DOT_CLEARANCE + capStroke * 0.5f)
+                .coerceAtLeast(10f)
         private val capInkLeft = CAP_LEFT - capStroke * 0.5f
         private val capInkTop = CAP_TOP - capStroke * 0.5f
-        private val capInkH = (CAP_BOTTOM - CAP_TOP) + capStroke
+        private val capInkH = ((CAP_BOTTOM - CAP_TOP) + capStroke).coerceAtLeast(20f)
         /** 左右边距（占轮廓高 %）：左格图标/文字与右格数字距内壁的内缩。 */
-        private val capTextInset = (CAP_BOTTOM - CAP_TOP) * config.capsuleMarginHPct / 100f
+        private val capTextInset = ((CAP_BOTTOM - CAP_TOP) * config.capsuleMarginHPct / 100f)
+            .coerceIn(0f, 30f)
         private val capInteriorLeft = CAP_LEFT + capStroke * 0.5f
-        private val capInteriorTop = CAP_TOP + capStroke * 0.5f + capDotR
+        private val capInteriorTop = (CAP_TOP + capStroke * 0.5f + capDotR).coerceAtMost(CAP_BOTTOM - capStroke - capDotR - 8f)
         private val capInteriorBottom = CAP_BOTTOM - capStroke * 0.5f - capDotR
         private val capInteriorCy = (capInteriorTop + capInteriorBottom) * 0.5f
         /** 元素字高 = 内腔高 − 上下边距（边距占轮廓高 %），最小 8 设计单位。 */
@@ -1081,18 +1084,18 @@ object TrioFeature {
             (capInteriorBottom - capInteriorTop) -
                 2f * (CAP_BOTTOM - CAP_TOP) * config.capsuleMarginVPct / 100f
             ).coerceAtLeast(8f)
-        private val capTextSize = capTextCap / 0.71f
+        private val capTextSize = (capTextCap / 0.71f).coerceAtLeast(8f)
         /** 胶囊 Wi-Fi：把墨迹高 35.5548 的环内 Wi-Fi 缩到设计字高。 */
-        private val capWifiScale = capTextCap / CAP_WIFI_INK_H
+        private val capWifiScale = (capTextCap / CAP_WIFI_INK_H).coerceIn(0.3f, 2f)
         private val capLeftIconCx =
-            capInteriorLeft + capTextInset + CAP_WIFI_INK_W * capWifiScale * 0.5f
-        private val capWifiStroke = WIFI_STROKE * capWifiScale
-        private val capW1R = W1_R * W_SCALE * capWifiScale
+            (capInteriorLeft + capTextInset + CAP_WIFI_INK_W * capWifiScale * 0.5f).coerceAtLeast(capInteriorLeft + 4f)
+        private val capWifiStroke = (WIFI_STROKE * capWifiScale).coerceAtLeast(2f)
+        private val capW1R = (W1_R * W_SCALE * capWifiScale).coerceAtLeast(4f)
         private val capW1Cy = capInteriorCy + (W1_CY + W_LIFT - CAP_WIFI_INK_CY) * capWifiScale
-        private val capW2R = W2_R * W_SCALE * capWifiScale
+        private val capW2R = (W2_R * W_SCALE * capWifiScale).coerceAtLeast(2f)
         private val capW2Cy = capInteriorCy + (W2_CY_BAKED - CAP_WIFI_INK_CY) * capWifiScale
         private val capWDotY = capInteriorCy + (W_DOT_Y_BAKED - CAP_WIFI_INK_CY) * capWifiScale
-        private val capWDotR = W_DOT_R_BAKED * capWifiScale
+        private val capWDotR = (W_DOT_R_BAKED * capWifiScale).coerceAtLeast(1f)
         private val capW1Oval = RectF(
             capLeftIconCx - capW1R, capW1Cy - capW1R,
             capLeftIconCx + capW1R, capW1Cy + capW1R,
@@ -1102,16 +1105,19 @@ object TrioFeature {
             capLeftIconCx + capW2R, capW2Cy + capW2R,
         )
         /** 胶囊飞机图标：原机 39.2×29.1，按字高缩放。 */
-        private val capPlaneScale = capTextCap / CAP_PLANE_INK_H
+        private val capPlaneScale = (capTextCap / CAP_PLANE_INK_H).coerceIn(0.3f, 2f)
         /** 下开口蓝牙电量：进度线半长随点半径，线宽随描边（0.6 倍）。 */
-        private val capBtBarHalf = CAP_DOT_PITCH * 1.5f + capDotR
-        private val capBtBarStroke = capStroke * 0.6f
+        private val capBtBarHalf = (CAP_DOT_PITCH * 1.5f + capDotR).coerceAtLeast(5f)
+        private val capBtBarStroke = (capStroke * 0.6f).coerceAtLeast(1.5f)
 
-        private val capRight = CAP_RIGHT_REF + config.capsuleLength
+        private val capRight = (CAP_RIGHT_REF + config.capsuleLength).coerceAtLeast(CAP_LEFT + CAP_RADIUS * 2f + 10f)
         private val capCx = (CAP_LEFT + capRight) * 0.5f
-        private val capInkW = capRight - CAP_LEFT + capStroke
+        private val capInkW = (capRight - CAP_LEFT + capStroke).coerceAtLeast(capStroke * 2f)
         /** 胶囊过短时开口切深收窄到剩余直段，避免开口越过圆帽。 */
-        private val capReach = min(capDotReach, capCx - CAP_LEFT - CAP_RADIUS)
+        private val capReach = min(
+            capDotReach,
+            (capCx - CAP_LEFT - CAP_RADIUS).coerceAtLeast(2f),
+        )
         private val capArcRect = RectF()
 
         /** 胶囊轮廓：上下各一个开口，剩下左、右两段开放弧；长度固定，只构建一次。 */
@@ -1419,25 +1425,33 @@ object TrioFeature {
         }
 
         override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            if (config.style == STYLE_CAPSULE) {
-                drawCapsule(canvas)
-                return
+            runCatching {
+                super.onDraw(canvas)
+                if (config.style == STYLE_CAPSULE) {
+                    drawCapsule(canvas)
+                } else {
+                    val size = min(width, height).toFloat()
+                    if (size > 0f) {
+                        val scale = size / 120f
+                        val save = canvas.save()
+                        canvas.translate((width - size) / 2f, (height - size) / 2f)
+                        canvas.scale(scale, scale)
+                        val fg = resolveForeground()
+                        drawRing(canvas, fg)
+                        drawTop(canvas, fg)
+                        drawMobile(canvas, fg)
+                        drawCentre(canvas, fg)
+                        canvas.restoreToCount(save)
+                    }
+                }
+            }.onFailure { t ->
+                XLog.log(
+                    Log.ERROR,
+                    MountEngine.TAG,
+                    "$JUDGE_PREFIX TrioView.onDraw 异常（已防护，跳过本帧绘制）: ${t.javaClass.simpleName}: ${t.message}",
+                    t,
+                )
             }
-            val size = min(width, height).toFloat()
-            if (size <= 0f) return
-            val scale = size / 120f
-            val save = canvas.save()
-            canvas.translate((width - size) / 2f, (height - size) / 2f)
-            canvas.scale(scale, scale)
-
-            val fg = resolveForeground()
-            drawRing(canvas, fg)
-            drawTop(canvas, fg)
-            drawMobile(canvas, fg)
-            drawCentre(canvas, fg)
-
-            canvas.restoreToCount(save)
         }
 
         private fun resolveForeground(): Int {
