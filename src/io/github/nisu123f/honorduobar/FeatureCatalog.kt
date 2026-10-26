@@ -18,6 +18,13 @@ object FeatureCatalog {
     /** 灵动胶囊展开时保留蓝牙等状态图标（不让原生按胶囊边界把图标淡出）。 */
     const val KEY_SYSTEMUI_TRIO_KEEP_ICONS = "systemui.trio_keep_icons"
 
+    /**
+     * MagicOS 10 反色兼容开关：开启后三合一图标反色走原 onDarkChanged 回调方案
+     * （v1.0.8 逻辑），关闭时走 HonorDuo refreshTint + 电池 mTintColor 采样方案。
+     * MagicOS 11 固定走 HonorDuo 方案，本开关不生效且设置页不显示。
+     */
+    const val KEY_SYSTEMUI_TRIO_LEGACY_TINT = "systemui.trio_legacy_tint"
+
     /** 下拉面板（通知/控制中心）展开时切回原生信号/电池图标，面板收起后恢复三合一。 */
     const val KEY_SYSTEMUI_PANEL_NATIVE_ICONS = "systemui.panel_native_icons"
     /** 三合一图标尺寸（dp，18–26）。 */
@@ -129,6 +136,13 @@ object FeatureCatalog {
             KEY_SYSTEMUI_TRIO_KEEP_ICONS,
             "灵动胶囊：展开时保留图标",
             "灵动胶囊展开时，原生会按胶囊边界把蓝牙等状态图标淡出；三合一已腾出空间，开启后保持这些图标可见。",
+            defaultEnabled = true,
+            dependsOn = KEY_SYSTEMUI_TRIO,
+        ),
+        Feature(
+            KEY_SYSTEMUI_TRIO_LEGACY_TINT,
+            "三合一：MagicOS 10 反色兼容",
+            "仅 MagicOS 10 显示。开启后图标反色走原 onDarkChanged 回调方案（v1.0.8 逻辑），关闭时走 HonorDuo refreshTint 方案。若关闭后图标反色异常（如白底看不清），请开启本开关。改动需重启系统界面生效。",
             defaultEnabled = true,
             dependsOn = KEY_SYSTEMUI_TRIO,
         ),

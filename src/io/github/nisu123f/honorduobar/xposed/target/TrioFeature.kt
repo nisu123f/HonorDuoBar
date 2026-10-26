@@ -29,6 +29,7 @@ import io.github.nisu123f.honorduobar.FeatureCatalog
 import io.github.nisu123f.honorduobar.xposed.core.MountEngine
 import io.github.nisu123f.honorduobar.xposed.core.XLog
 import io.github.nisu123f.honorduobar.xposed.core.MountSession
+import io.github.nisu123f.honorduobar.xposed.core.MagicOsVersion
 import io.github.nisu123f.honorduobar.xposed.data.RemoteConfig
 import java.lang.ref.WeakReference
 import java.lang.reflect.Field
@@ -62,9 +63,11 @@ object TrioFeature {
     private const val HOST_PACKAGE = "com.android.systemui"
     private const val CLS_SYSTEM_ICONS = "com.android.systemui.statusbar.HwSystemIcons"
     private const val CLS_STATUSBAR_CONTENTS = "com.android.systemui.statusbar.HwStatusbarContents"
+    private const val CLS_SIGNAL_CLUSTER = "com.android.systemui.statusbar.SignalClusterView"
     private const val CLS_BT_POLICY = "com.android.systemui.statusbar.phone.HwPhoneStatusBarPolicy"
     private const val METHOD_FINISH_INFLATE = "onFinishInflate"
     private const val METHOD_REFRESH_TINT = "refreshTint"
+    private const val METHOD_DARK_CHANGED = "onDarkChanged"
     private const val METHOD_LAYOUT = "onLayout"
     private const val METHOD_MEASURE = "onMeasure"
     private const val METHOD_UPDATE_ICONS_ALPHA = "updateIconsAlpha"
@@ -87,6 +90,7 @@ object TrioFeature {
     private const val JUDGE_PREFIX = "SystemUiHook·U9"
     private const val ID_INFLATE = "systemui:trio.systemIcons.onFinishInflate"
     private const val ID_REFRESH_TINT = "systemui:trio.hwContents.refreshTint"
+    private const val ID_DARK_CHANGED = "systemui:trio.signalCluster.onDarkChanged"
     private const val ID_LAYOUT = "systemui:trio.systemIcons.onLayout"
     private const val ID_MEASURE = "systemui:trio.systemIcons.onMeasure"
     private const val ID_UPDATE_ALPHA = "systemui:trio.systemIcons.updateIconsAlpha"
@@ -167,6 +171,17 @@ object TrioFeature {
 
     /** 所有已注入的三合一 View（折叠栏/锁屏/覆盖层各一个实例；仅主线程读写）。 */
     private val trioViews = ArrayList<WeakReference<TrioView>>()
+
+    // ---- 反色方案 ----
+    /**
+     * 反色方案：MagicOS 11 固定走 HonorDuo（refreshTint + 电池 mTintColor 采样）；
+     * MagicOS 10 且用户开启兼容开关时走原 onDarkChanged 回调方案（v1.0.8 逻辑）。
+     * 在 install() 时一次性判定，后续不再变化。
+     */
+    @Volatile private var useLegacyTint = false
+
+    /** 原方案的状态栏 tint 色（onDarkChanged 第三参），0 = 尚未收到。 */
+    @Volatile private var legacyTintColor = 0
 
     // ---- 下拉面板切原生图标 ----
     /** 面板展开全局状态（任一 HwPanelView 展开即 true；所有三合一宿主同步切原生）。 */
@@ -294,6 +309,18 @@ object TrioFeature {
             param.applicationInfo?.sourceDir,
             FeatureCatalog.baselineVersionOf(HOST_PACKAGE),
         )
+        // 反色方案判定（一次性）：
+        // - MagicOS 11 / 未知：HonorDuo 方案（refreshTint + 电池 mTintColor 采样）
+        // - MagicOS 10 且兼容开关开启：原 onDarkChanged 回调方案（v1.0.8 逻辑）
+        val magicOsMajor = MagicOsVersion.major
+        useLegacyTint = magicOsMajor == 10 &&
+            RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_LEGACY_TINT)
+        XLog.log(
+            Log.INFO,
+            MountEngine.TAG,
+            "$JUDGE_PREFIX 反色方案: magicOs=$magicOsMajor, legacyTint=$useLegacyTint" +
+                if (useLegacyTint) "（onDarkChanged）" else "（HonorDuo refreshTint）",
+        )
         val pending = buildList {
             add(
                 MountEngine.SimpleTask(
@@ -335,16 +362,31 @@ object TrioFeature {
                     description = "U9 三合一胶囊避让（HwSystemIcons.updateIconsAlpha 后恢复状态图标 alpha，胶囊不再挤掉蓝牙等图标）",
                 ),
             )
-            add(
-                MountEngine.SimpleTask(
-                    className = CLS_STATUSBAR_CONTENTS,
-                    methodName = METHOD_REFRESH_TINT,
-                    paramCount = 0,
-                    returnType = "void",
-                    id = ID_REFRESH_TINT,
-                    description = "U9 三合一反色（HwStatusbarContents.refreshTint 后按电池字段重采样重绘，HonorDuo 同源）",
-                ),
-            )
+            // 反色 hook：HonorDuo 方案挂 HwStatusbarContents.refreshTint；
+            // 原方案挂 SignalClusterView.onDarkChanged（第三参即 tint 色）。
+            if (useLegacyTint) {
+                add(
+                    MountEngine.SimpleTask(
+                        className = CLS_SIGNAL_CLUSTER,
+                        methodName = METHOD_DARK_CHANGED,
+                        paramCount = 3,
+                        returnType = "void",
+                        id = ID_DARK_CHANGED,
+                        description = "U9 三合一反色（SignalClusterView.onDarkChanged 第三参同步自绘颜色，MagicOS 10 兼容）",
+                    ),
+                )
+            } else {
+                add(
+                    MountEngine.SimpleTask(
+                        className = CLS_STATUSBAR_CONTENTS,
+                        methodName = METHOD_REFRESH_TINT,
+                        paramCount = 0,
+                        returnType = "void",
+                        id = ID_REFRESH_TINT,
+                        description = "U9 三合一反色（HwStatusbarContents.refreshTint 后按电池字段重采样重绘，HonorDuo 同源）",
+                    ),
+                )
+            }
             // 蓝牙耳机电量 hook 由模式独立控制挂载：模式=关闭（默认）时不挂，
             // 避免挂载/回调异常穿透 SystemUI 触发 LSPosed 安全模式。
             // 模式切换需重启 SystemUI 生效（与其他 hook 一致，挂载时机是 onPackageLoaded 一次性）。
@@ -466,6 +508,15 @@ object TrioFeature {
                 // 下一 vsync 重绘，onDraw 实际发生在本调用栈之后，采到的就是新值）。
                 chain.proceed()
                 invalidateAllTrio()
+            }
+            ID_DARK_CHANGED -> {
+                // 原方案：onDarkChanged(Rect, float, int) 第三参即 tint 色。
+                chain.proceed()
+                val tint = runCatching { chain.getArg(2) as? Int }.getOrNull()
+                if (tint != null && tint != 0) {
+                    legacyTintColor = tint
+                    invalidateAllTrio()
+                }
             }
             ID_PANEL_EXPAND -> {
                 // 面板滑动/动画期间逐帧回调：仅读字段比对状态，翻转时才动 View，开销可忽略。
@@ -928,9 +979,18 @@ object TrioFeature {
             ),
         )
         val view = TrioView(ctx, config)
-        view.tintProvider = {
-            val sampled = sampleBatteryTint(battery)
-            if (sampled != 0) sampled else runCatching { tintField?.getInt(cluster) }.getOrNull() ?: 0
+        view.tintProvider = if (useLegacyTint) {
+            // 原方案（MagicOS 10 兼容）：onDarkChanged 第三参 → SignalClusterView.mIconTint 兜底。
+            {
+                val tint = legacyTintColor
+                if (tint != 0) tint else runCatching { tintField?.getInt(cluster) }.getOrNull() ?: 0
+            }
+        } else {
+            // HonorDuo 方案：电池 mTintColor → mBorderView.mDefaultColor → SignalClusterView.mIconTint 兜底。
+            {
+                val sampled = sampleBatteryTint(battery)
+                if (sampled != 0) sampled else runCatching { tintField?.getInt(cluster) }.getOrNull() ?: 0
+            }
         }
         view.tag = TAG_VIEW
         // 固定 dp 尺寸，不跟父容器高度拉伸：横屏/锁屏的状态栏行高更大时字形也不会放大。

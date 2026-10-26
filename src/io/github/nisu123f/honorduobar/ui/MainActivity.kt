@@ -27,6 +27,7 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import io.github.nisu123f.honorduobar.FeatureCatalog
+import io.github.nisu123f.honorduobar.xposed.core.MagicOsVersion
 
 /** 设置页：纯代码 UI（无资源依赖，便于独立构建）。 */
 class MainActivity : Activity() {
@@ -75,13 +76,18 @@ class MainActivity : Activity() {
 
         root.addView(buildStatusCard())
         root.addView(sectionTitle("状态栏"))
-        root.addView(buildCard(featureRows { it.key !in notifCenterKeys && it.key !in controlCenterKeys && it.key !in capsuleKeys } + buildClockRow() + buildStyleRow() + buildCapsuleSettingsRow() + buildSizeRow() + buildBtStyleRow()))
+        root.addView(buildCard(featureRows {
+            it.key !in notifCenterKeys && it.key !in controlCenterKeys &&
+                it.key !in capsuleKeys && it.key !in advancedKeys
+        } + buildClockRow() + buildStyleRow() + buildCapsuleSettingsRow() + buildSizeRow() + buildBtStyleRow()))
         root.addView(sectionTitle("灵动胶囊"))
         root.addView(buildCard(featureRows { it.key in capsuleKeys }))
         root.addView(sectionTitle("通知中心"))
         root.addView(buildCard(featureRows { it.key in notifCenterKeys } + buildWeatherTemplateRow() + buildWeatherClickRow()))
         root.addView(sectionTitle("控制中心"))
         root.addView(buildCard(featureRows { it.key in controlCenterKeys }))
+        root.addView(sectionTitle("高级"))
+        root.addView(buildCard(featureRows { it.key in advancedKeys }))
         root.addView(buildTipCard())
         root.addView(buildRestartButton())
 
@@ -140,6 +146,14 @@ class MainActivity : Activity() {
             setTextColor(colorSub)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding(0, dp(6), 0, 0)
+        })
+        card.addView(TextView(this).apply {
+            val major = MagicOsVersion.major
+            text = "系统：MagicOS ${major ?: "未知"}" +
+                if (major == 10) "（反色兼容开关已启用）" else ""
+            setTextColor(colorSub)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setPadding(0, dp(3), 0, 0)
         })
         card.layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -878,6 +892,13 @@ class MainActivity : Activity() {
                 weatherClickRow.alpha = if (weather) 1f else 0.4f
             }
         }
+        // MagicOS 10 反色兼容开关：仅 MagicOS 10 可操作，其余版本（含 11）显示但禁用。
+        switches[FeatureCatalog.KEY_SYSTEMUI_TRIO_LEGACY_TINT]?.let { toggle ->
+            if (!MagicOsVersion.isMagicOs10) {
+                toggle.isEnabled = false
+                toggle.alpha = 0.4f
+            }
+        }
     }
 
     private fun toast(message: String) {
@@ -1068,6 +1089,12 @@ class MainActivity : Activity() {
         val capsuleKeys = listOf(
             FeatureCatalog.KEY_SYSTEMUI_TRIO_KEEP_ICONS,
             FeatureCatalog.KEY_SYSTEMUI_CAPSULE_NO_SCALE,
+        )
+
+        /** 「高级」分组的功能 key（兼容性开关 + 诊断日志）。 */
+        val advancedKeys = listOf(
+            FeatureCatalog.KEY_SYSTEMUI_TRIO_LEGACY_TINT,
+            FeatureCatalog.KEY_DEBUG_LOG,
         )
     }
 }
