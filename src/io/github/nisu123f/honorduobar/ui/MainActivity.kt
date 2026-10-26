@@ -216,7 +216,7 @@ class MainActivity : Activity() {
                 text = feature.desc
                 setTextColor(colorSub)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                setPadding(0, dp(3), dp(12), 0)
+                setPadding(0, dp(3), dp(8), 0)
                 setLineSpacing(dp(2).toFloat(), 1f)
             })
             row.addView(texts)
@@ -224,6 +224,9 @@ class MainActivity : Activity() {
             val toggle = Switch(this).apply {
                 isChecked = FeatureStore.isEnabled(feature.key)
                 showText = false
+                setMinWidth(0)
+                minimumWidth = 0
+                setPadding(dp(4), 0, 0, 0)
                 setOnCheckedChangeListener { _, checked ->
                     if (feature.dependsOn != null && !FeatureStore.isEnabled(feature.dependsOn)) {
                         isChecked = false
@@ -383,22 +386,122 @@ class MainActivity : Activity() {
             toast("请先开启「通知中心天气」")
             return
         }
+
+        // 可编辑模板框：多行可滚动，点击变量按钮在光标处插入
         val input = EditText(this).apply {
             setText(FeatureStore.weatherTemplate())
-            setSingleLine(true)
+            setSingleLine(false)
+            setHorizontallyScrolling(false)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            setLines(2)
             setSelection(text.length)
-            setPadding(dp(20), dp(8), dp(20), dp(8))
+            setPadding(dp(20), dp(12), dp(20), dp(12))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            gravity = Gravity.TOP or Gravity.START
         }
+
+        // 变量分组：类别 → 变量名列表
+        val variableGroups = listOf(
+            "基础" to listOf("天气图标", "天气", "当前温度", "最低温度", "最高温度", "体感温度"),
+            "定位" to listOf("定位"),
+            "空气" to listOf("空气质量", "AQI", "PM25", "PM10"),
+            "其他" to listOf("湿度", "紫外线", "风向", "风速", "气压", "日出", "日落"),
+            "明日" to listOf("明日天气", "明日最高", "明日最低"),
+        )
+
+        // 预设模板
+        val presets = listOf(
+            "默认" to FeatureCatalog.defaultWeatherTemplate(),
+            "简洁" to "{天气图标}{天气} {当前温度}",
+            "详细" to "{天气图标}{天气}{当前温度}({体感温度}) {最低温度}/{最高温度} {空气质量}",
+            "带定位" to "📍{定位} {天气图标}{天气} {当前温度}",
+            "极简" to "{天气图标}{当前温度}",
+        )
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(4), dp(20), dp(4))
+        }
+        box.addView(input)
+
+        // 变量按钮网格（按类别分行）
+        for ((group, vars) in variableGroups) {
+            // 类别标签
+            box.addView(TextView(this).apply {
+                text = group
+                setTextColor(colorSub)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                setPadding(0, dp(8), 0, dp(2))
+            })
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, 0, 0, dp(2))
+            }
+            for (v in vars) {
+                val btn = android.widget.Button(this).apply {
+                    text = "{$v}"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                    isAllCaps = false
+                    setPadding(dp(6), dp(1), dp(6), dp(1))
+                    setOnClickListener {
+                        val start = input.selectionStart.coerceAtLeast(0)
+                        val end = input.selectionEnd.coerceAtLeast(start)
+                        input.text.replace(start, end, "{$v}")
+                        input.setSelection(start + v.length + 2)
+                    }
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { marginEnd = dp(4) }
+                }
+                row.addView(btn)
+            }
+            box.addView(row)
+        }
+
+        // 预设模板行
+        box.addView(TextView(this).apply {
+            text = "预设模板"
+            setTextColor(colorSub)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setPadding(0, dp(10), 0, dp(2))
+        })
+        val presetRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        for ((name, tpl) in presets) {
+            val btn = android.widget.Button(this).apply {
+                text = name
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                isAllCaps = false
+                setPadding(dp(10), dp(2), dp(10), dp(2))
+                setOnClickListener {
+                    input.setText(tpl)
+                    input.setSelection(tpl.length)
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginEnd = dp(6) }
+            }
+            presetRow.addView(btn)
+        }
+        box.addView(presetRow)
+
         AlertDialog.Builder(this)
             .setTitle("天气显示模板")
-            .setMessage("可用变量：{定位} {天气} {天气图标} {当前温度} {最低温度} {最高温度} {体感温度} {湿度} {紫外线} {风向} {风速} {空气质量} {AQI} {PM25} {PM10} {气压} {日出} {日落} {明日天气} {明日最高} {明日最低}")
-            .setView(input)
+            .setView(box)
             .setPositiveButton("保存") { _, _ ->
                 val pushed = FeatureStore.setWeatherTemplate(input.text.toString())
                 updateWeatherTemplateText()
                 if (!pushed) toast("已保存到本地，但 LSPosed 未连接，本次改动不会下发")
             }
             .setNegativeButton("取消", null)
+            .setNeutralButton("恢复默认") { _, _ ->
+                val default = FeatureCatalog.defaultWeatherTemplate()
+                input.setText(default)
+                input.setSelection(default.length)
+            }
             .show()
     }
 
@@ -630,6 +733,149 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(0, dp(12), 0, dp(16))
             addView(preview)
+        })
+
+        /** 预览状态切换行：标题 + 一组按钮（单选）。 */
+        fun segRow(
+            label: String,
+            options: List<Pair<String, Int>>,
+            current: Int,
+            onSelect: (Int) -> Unit,
+        ) {
+            val item = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(4), 0, dp(4))
+            }
+            item.addView(TextView(this).apply {
+                text = label
+                setTextColor(colorSub)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setPadding(0, 0, 0, dp(4))
+            })
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            val buttons = ArrayList<Triple<String, Int, android.widget.Button>>()
+            for ((text, value) in options) {
+                val btn = android.widget.Button(this).apply {
+                    this.text = text
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                    isAllCaps = false
+                    setPadding(dp(8), dp(2), dp(8), dp(2))
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                        marginEnd = dp(4)
+                    }
+                }
+                buttons.add(Triple(text, value, btn))
+                row.addView(btn)
+            }
+            item.addView(row)
+            box.addView(item)
+
+            fun update(selected: Int) {
+                for ((_, value, btn) in buttons) {
+                    btn.isSelected = value == selected
+                    btn.setTextColor(if (value == selected) colorAccent else colorText)
+                }
+            }
+            update(current)
+            for ((_, value, btn) in buttons) {
+                btn.setOnClickListener {
+                    onSelect(value)
+                    update(value)
+                    preview.refresh()
+                }
+            }
+        }
+
+        // ---- 预览状态控件 ----
+        // 电量滑块
+        val levelItem = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val levelHead = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        levelHead.addView(TextView(this).apply {
+            text = "预览电量"
+            setTextColor(colorText)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        val levelText = TextView(this).apply {
+            setTextColor(colorAccent)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            text = "${preview.previewLevel}%"
+        }
+        levelHead.addView(levelText)
+        levelItem.addView(levelHead)
+        levelItem.addView(SeekBar(this).apply {
+            max = 100
+            progress = preview.previewLevel
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    preview.previewLevel = progress
+                    levelText.text = "$progress%"
+                    preview.refresh()
+                }
+                override fun onStartTrackingTouch(sb: SeekBar?) = Unit
+                override fun onStopTrackingTouch(sb: SeekBar?) = Unit
+            })
+        })
+        box.addView(levelItem)
+
+        segRow(
+            "左格内容",
+            listOf("Wi-Fi" to LEFT_WIFI, "5G" to LEFT_5G, "4G" to LEFT_4G, "飞行" to LEFT_AIRPLANE, "无" to LEFT_NONE),
+            preview.previewLeftMode,
+        ) { preview.previewLeftMode = it }
+
+        segRow(
+            "SIM 卡",
+            listOf("单卡" to SIM_SINGLE, "双卡" to SIM_DUAL),
+            preview.previewSimMode,
+        ) { preview.previewSimMode = it }
+
+        segRow(
+            "蓝牙电量",
+            listOf("关" to BT_OFF, "弧线" to BT_ARC, "数字" to BT_TEXT),
+            preview.previewBtMode,
+        ) { preview.previewBtMode = it }
+
+        // 蓝牙电量值滑块（仅蓝牙开启时显示）
+        val btLevelItem = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val btLevelHead = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        btLevelHead.addView(TextView(this).apply {
+            text = "蓝牙电量值"
+            setTextColor(colorText)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        val btLevelText = TextView(this).apply {
+            setTextColor(colorAccent)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            text = "${preview.previewBtLevel}%"
+        }
+        btLevelHead.addView(btLevelText)
+        btLevelItem.addView(btLevelHead)
+        btLevelItem.addView(SeekBar(this).apply {
+            max = 100
+            progress = preview.previewBtLevel
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    preview.previewBtLevel = progress
+                    btLevelText.text = "$progress%"
+                    preview.refresh()
+                }
+                override fun onStartTrackingTouch(sb: SeekBar?) = Unit
+                override fun onStopTrackingTouch(sb: SeekBar?) = Unit
+            })
+        })
+        box.addView(btLevelItem)
+
+        // 分隔线
+        box.addView(View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1)
+            setBackgroundColor(0x1A000000)
+            setPadding(0, dp(8), 0, dp(8))
         })
 
         /** 弹窗内滑块行：标题 + 当前值一行、下面 SeekBar；拖动即保存并刷新预览。 */
@@ -919,10 +1165,17 @@ class MainActivity : Activity() {
 
     /**
      * 胶囊预览：按当前设置（长度/高度/线宽/内部边距）以真实 dp 尺寸绘制样例，
-     * 与 hook 侧 TrioView 的胶囊几何同公式；固定样例状态：电量 100、5G、
-     * 单卡 3 格（顶部闭合、下开口信号点）、未充电。
+     * 与 hook 侧 TrioView 的胶囊几何同公式。预览状态可由对话框控件切换：
+     * 电量、左格（Wi-Fi/5G/4G/飞行/无）、单卡/双卡、蓝牙电量。
      */
     private inner class CapsulePreviewView(context: android.content.Context) : View(context) {
+
+        // ---- 预览状态（对话框控件修改后刷新） ----
+        var previewLevel = 100
+        var previewLeftMode = LEFT_5G
+        var previewSimMode = SIM_SINGLE
+        var previewBtMode = BT_OFF
+        var previewBtLevel = 80
 
         private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
@@ -968,11 +1221,11 @@ class MainActivity : Activity() {
             val interiorTop = TOP + stroke * 0.5f + dotR
             val interiorBottom = BOTTOM - stroke * 0.5f - dotR
             val interiorCy = (interiorTop + interiorBottom) * 0.5f
-            // 元素字高 = 内腔高 − 上下边距，与 TrioView 同公式
             val textCap = (
                 (interiorBottom - interiorTop) -
                     2f * 59f * FeatureStore.capsuleMarginV() / 100f
                 ).coerceAtLeast(8f)
+            val textSize = textCap / 0.71f
             val right = RIGHT_REF + FeatureCatalog.resolveCapsuleLength(FeatureStore.capsuleLength())
             val cx = (LEFT + right) * 0.5f
             val inkW = right - LEFT + stroke
@@ -985,52 +1238,154 @@ class MainActivity : Activity() {
             canvas.scale(scale, scale)
             canvas.translate(-inkLeft, -inkTop)
 
-            // 轮廓轨道（单卡样例：顶部闭合、底部开口）
+            // 开口判定（与 TrioView drawCapsule 同规则）
+            val btShown = previewBtMode != BT_OFF
+            val topOpen = btShown || (previewSimMode == SIM_DUAL)
+            val bottomOpen = previewSimMode == SIM_DUAL || previewSimMode == SIM_SINGLE
+
+            // 轮廓轨道
             val k = 0.55228475f * RADIUS
             val cy = (TOP + BOTTOM) * 0.5f
             path.reset()
-            path.moveTo(cx - reach, BOTTOM)
-            path.lineTo(LEFT + RADIUS, BOTTOM)
-            path.cubicTo(LEFT + RADIUS - k, BOTTOM, LEFT, cy + k, LEFT, cy)
-            path.cubicTo(LEFT, cy - k, LEFT + RADIUS - k, TOP, LEFT + RADIUS, TOP)
-            path.lineTo(right - RADIUS, TOP)
-            path.cubicTo(right - RADIUS + k, TOP, right, cy - k, right, cy)
-            path.cubicTo(right, cy + k, right - RADIUS + k, BOTTOM, right - RADIUS, BOTTOM)
-            path.lineTo(cx + reach, BOTTOM)
+            when {
+                topOpen && bottomOpen -> {
+                    path.moveTo(cx + reach, TOP)
+                    path.lineTo(right - RADIUS, TOP)
+                    path.cubicTo(right - RADIUS + k, TOP, right, cy - k, right, cy)
+                    path.cubicTo(right, cy + k, right - RADIUS + k, BOTTOM, right - RADIUS, BOTTOM)
+                    path.lineTo(cx + reach, BOTTOM)
+                    path.moveTo(cx - reach, BOTTOM)
+                    path.lineTo(LEFT + RADIUS, BOTTOM)
+                    path.cubicTo(LEFT + RADIUS - k, BOTTOM, LEFT, cy + k, LEFT, cy)
+                    path.cubicTo(LEFT, cy - k, LEFT + RADIUS - k, TOP, LEFT + RADIUS, TOP)
+                    path.lineTo(cx - reach, TOP)
+                }
+                topOpen -> {
+                    // 底部闭合
+                    path.moveTo(cx - reach, TOP)
+                    path.lineTo(LEFT + RADIUS, TOP)
+                    path.cubicTo(LEFT + RADIUS - k, TOP, LEFT, cy - k, LEFT, cy)
+                    path.cubicTo(LEFT, cy + k, LEFT + RADIUS - k, BOTTOM, LEFT + RADIUS, BOTTOM)
+                    path.lineTo(right - RADIUS, BOTTOM)
+                    path.cubicTo(right - RADIUS + k, BOTTOM, right, cy + k, right, cy)
+                    path.cubicTo(right, cy - k, right - RADIUS + k, TOP, right - RADIUS, TOP)
+                    path.lineTo(cx + reach, TOP)
+                }
+                bottomOpen -> {
+                    // 顶部闭合
+                    path.moveTo(cx - reach, BOTTOM)
+                    path.lineTo(LEFT + RADIUS, BOTTOM)
+                    path.cubicTo(LEFT + RADIUS - k, BOTTOM, LEFT, cy + k, LEFT, cy)
+                    path.cubicTo(LEFT, cy - k, LEFT + RADIUS - k, TOP, LEFT + RADIUS, TOP)
+                    path.lineTo(right - RADIUS, TOP)
+                    path.cubicTo(right - RADIUS + k, TOP, right, cy - k, right, cy)
+                    path.cubicTo(right, cy + k, right - RADIUS + k, BOTTOM, right - RADIUS, BOTTOM)
+                    path.lineTo(cx + reach, BOTTOM)
+                }
+                else -> {
+                    // 完整闭合
+                    path.moveTo(LEFT + RADIUS, TOP)
+                    path.lineTo(right - RADIUS, TOP)
+                    path.cubicTo(right - RADIUS + k, TOP, right, cy - k, right, cy)
+                    path.cubicTo(right, cy + k, right - RADIUS + k, BOTTOM, right - RADIUS, BOTTOM)
+                    path.lineTo(LEFT + RADIUS, BOTTOM)
+                    path.cubicTo(LEFT + RADIUS - k, BOTTOM, LEFT, cy + k, LEFT, cy)
+                    path.cubicTo(LEFT, cy - k, LEFT + RADIUS - k, TOP, LEFT + RADIUS, TOP)
+                }
+            }
             strokePaint.strokeWidth = stroke
             strokePaint.color = track
             canvas.drawPath(path, strokePaint)
 
-            // 电量填充 100%：整条轮廓点亮
-            strokePaint.color = fg
-            canvas.drawPath(path, strokePaint)
-
-            // 信号点：单卡样例 = 下开口 3 格（顶部闭合不画）
-            val firstX = cx - PITCH * 1.5f
-            for (i in 0 until 4) {
-                fillPaint.color = if (i < 3) fg else track
-                canvas.drawCircle(firstX + i * PITCH, BOTTOM, dotR, fillPaint)
+            // 电量填充（与 TrioView drawCapsuleFill 同分段逻辑）
+            val fraction = (previewLevel / 100f).coerceIn(0f, 1f)
+            if (fraction > 0f) {
+                strokePaint.color = fg
+                val bottomFirst = if (bottomOpen) (cx - reach) - (LEFT + RADIUS) else 0f
+                val topSeg1 = if (topOpen) bottomFirst else (right - RADIUS) - (LEFT + RADIUS)
+                val topSeg2 = if (topOpen) (right - RADIUS) - (cx + reach) else 0f
+                val bottomLast = if (bottomOpen) topSeg2 else (right - RADIUS) - (LEFT + RADIUS)
+                val capLen = PI * RADIUS
+                val total = bottomFirst + capLen + topSeg1 + topSeg2 + capLen + bottomLast
+                if (total > 0f) {
+                    var remaining = total * fraction
+                    var used: Float
+                    // 1. 左下直段
+                    used = minOf(remaining, bottomFirst).coerceAtLeast(0f); remaining -= used
+                    if (used > 0f) canvas.drawLine(cx - reach, BOTTOM, cx - reach - used, BOTTOM, strokePaint)
+                    // 2. 左圆帽
+                    used = minOf(remaining, capLen).coerceAtLeast(0f); remaining -= used
+                    if (used > 0f) {
+                        arcRect.set(LEFT, TOP, LEFT + 2f * RADIUS, BOTTOM)
+                        canvas.drawArc(arcRect, 90f, used / RADIUS * RAD_TO_DEG, false, strokePaint)
+                    }
+                    // 3. 顶部直段
+                    used = minOf(remaining, topSeg1).coerceAtLeast(0f); remaining -= used
+                    if (used > 0f) canvas.drawLine(LEFT + RADIUS, TOP, LEFT + RADIUS + used, TOP, strokePaint)
+                    // 4. 右上直段
+                    used = minOf(remaining, topSeg2).coerceAtLeast(0f); remaining -= used
+                    if (used > 0f) canvas.drawLine(cx + reach, TOP, cx + reach + used, TOP, strokePaint)
+                    // 5. 右圆帽
+                    used = minOf(remaining, capLen).coerceAtLeast(0f); remaining -= used
+                    if (used > 0f) {
+                        arcRect.set(right - 2f * RADIUS, TOP, right, BOTTOM)
+                        canvas.drawArc(arcRect, 270f, used / RADIUS * RAD_TO_DEG, false, strokePaint)
+                    }
+                    // 6. 末端底部直段
+                    used = minOf(remaining, bottomLast).coerceAtLeast(0f)
+                    if (used > 0f) canvas.drawLine(right - RADIUS, BOTTOM, right - RADIUS - used, BOTTOM, strokePaint)
+                }
             }
 
-            // 左格 5G 文字（与 TrioView drawCapsuleLeft 同锚点同字体，制式文字 0.82 档）
-            val textSize = textCap / 0.71f
-            textPaint.color = fg
-            textPaint.textSize = textSize * 0.82f
-            textPaint.typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-            textPaint.textAlign = Paint.Align.LEFT
-            textPaint.getTextBounds("5G", 0, 2, textBounds)
-            canvas.drawText(
-                "5G",
-                interiorLeft + inset,
-                interiorCy - (textBounds.top + textBounds.bottom) / 2f,
-                textPaint,
-            )
+            // 信号点（与 TrioView drawCapsuleSignals 同规则）
+            val firstX = cx - PITCH * 1.5f
+            val btLevel = if (btShown) previewBtLevel else -1
+            if (btShown) {
+                if (previewBtMode == BT_TEXT) {
+                    textPaint.color = fg
+                    textPaint.textSize = 12f
+                    textPaint.typeface = Typeface.create("sans-serif", Typeface.BOLD)
+                    textPaint.textAlign = Paint.Align.CENTER
+                    drawTextCentered(canvas, btLevel.toString(), cx, TOP + 1f)
+                } else {
+                    strokePaint.strokeWidth = (stroke * 0.6f).coerceAtLeast(1.5f)
+                    strokePaint.color = track
+                    val half = (PITCH * 1.5f + dotR).coerceAtLeast(5f)
+                    canvas.drawLine(cx - half, TOP, cx + half, TOP, strokePaint)
+                    if (btLevel > 0) {
+                        strokePaint.color = fg
+                        canvas.drawLine(cx - half, TOP, cx - half + 2f * half * btLevel / 100f, TOP, strokePaint)
+                    }
+                }
+            } else if (previewSimMode == SIM_DUAL) {
+                for (i in 0 until 4) {
+                    fillPaint.color = if (i < 3) fg else track
+                    canvas.drawCircle(firstX + i * PITCH, TOP, dotR, fillPaint)
+                }
+            }
+            // 下开口：双卡=卡2，单卡=唯一卡；无卡则不画（bottomOpen=false 时也不画）
+            if (bottomOpen) {
+                for (i in 0 until 4) {
+                    fillPaint.color = if (i < 3) fg else track
+                    canvas.drawCircle(firstX + i * PITCH, BOTTOM, dotR, fillPaint)
+                }
+            }
 
-            // 右格电量数字
-            val text = "100"
+            // 左格内容
+            drawPreviewLeft(canvas, fg, interiorLeft + inset, interiorCy, textCap)
+
+            // 右格电量数字（三位数压缩到两位数宽度，与 TrioView 同逻辑）
+            val text = previewLevel.toString()
             textPaint.textSize = textSize
             textPaint.typeface = Typeface.create("sans-serif", Typeface.BOLD)
             textPaint.textAlign = Paint.Align.RIGHT
+            if (text.length > 2) {
+                val limit = textPaint.measureText("99")
+                val actual = textPaint.measureText(text)
+                textPaint.textScaleX = (limit / actual).coerceAtMost(1f)
+            } else {
+                textPaint.textScaleX = 1f
+            }
             textPaint.getTextBounds(text, 0, text.length, textBounds)
             canvas.drawText(
                 text,
@@ -1038,8 +1393,69 @@ class MainActivity : Activity() {
                 interiorCy - (textBounds.top + textBounds.bottom) / 2f,
                 textPaint,
             )
+            textPaint.textScaleX = 1f
 
             canvas.restoreToCount(save)
+        }
+
+        private fun drawPreviewLeft(canvas: Canvas, fg: Int, x: Float, cy: Float, textCap: Float) {
+            when (previewLeftMode) {
+                LEFT_WIFI -> {
+                    // Wi-Fi：按字高等比缩放（与 TrioView 胶囊 Wi-Fi 同逻辑）
+                    val wifiScale = (textCap / 35.5548f).coerceIn(0.3f, 2f)
+                    val wifiStroke = (10f * 0.92f * wifiScale).coerceAtLeast(2f)
+                    val w1r = (31f * 0.92f * wifiScale).coerceAtLeast(4f)
+                    val w2r = (18.5f * 0.92f * wifiScale).coerceAtLeast(2f)
+                    val wcx = x + 47.856f * wifiScale * 0.5f
+                    val wcy = cy
+                    val w1cy = wcy + (78.30351f + (-40.5f) - 22.4609f) * wifiScale
+                    val w2cy = wcy + ((78.30351f + (78.88818f - 78.30351f) * 0.92f + (-40.5f)) - 22.4609f) * wifiScale
+                    val wdotY = wcy + ((78.30351f + (75.45f - 78.30351f) * 0.92f + (-40.5f)) - 22.4609f) * wifiScale
+                    val wdotR = (5.5f * 0.92f * wifiScale).coerceAtLeast(1f)
+                    strokePaint.color = fg
+                    strokePaint.strokeWidth = wifiStroke
+                    canvas.drawArc(RectF(wcx - w1r, w1cy - w1r, wcx + w1r, w1cy + w1r), 227.3423f, 85.3154f, false, strokePaint)
+                    canvas.drawArc(RectF(wcx - w2r, w2cy - w2r, wcx + w2r, w2cy + w2r), 227.5048f, 84.9904f, false, strokePaint)
+                    fillPaint.color = fg
+                    canvas.drawCircle(wcx, wdotY, wdotR, fillPaint)
+                }
+                LEFT_5G, LEFT_4G -> {
+                    val label = if (previewLeftMode == LEFT_5G) "5G" else "4G"
+                    textPaint.color = fg
+                    textPaint.textSize = (textCap / 0.71f) * 0.82f
+                    textPaint.typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+                    textPaint.textAlign = Paint.Align.LEFT
+                    textPaint.getTextBounds(label, 0, label.length, textBounds)
+                    canvas.drawText(label, x, cy - (textBounds.top + textBounds.bottom) / 2f, textPaint)
+                }
+                LEFT_AIRPLANE -> {
+                    // 飞行模式：按字高等比缩放的飞机剪影
+                    val scale = (textCap / 29.1f).coerceIn(0.3f, 2f)
+                    fillPaint.color = fg
+                    val p = Path().apply {
+                        moveTo(x + 20f * scale, cy)
+                        lineTo(x + 6f * scale, cy + 4f * scale)
+                        lineTo(x + 2f * scale, cy + 12f * scale)
+                        lineTo(x + 9f * scale, cy + 6f * scale)
+                        lineTo(x + 4f * scale, cy + 14f * scale)
+                        lineTo(x, cy + 14f * scale)
+                        lineTo(x + 10f * scale, cy)
+                        lineTo(x, cy - 14f * scale)
+                        lineTo(x + 4f * scale, cy - 14f * scale)
+                        lineTo(x + 9f * scale, cy - 6f * scale)
+                        lineTo(x + 2f * scale, cy - 12f * scale)
+                        lineTo(x + 6f * scale, cy - 4f * scale)
+                        close()
+                    }
+                    canvas.drawPath(p, fillPaint)
+                }
+                // LEFT_NONE: 不画
+            }
+        }
+
+        private fun drawTextCentered(canvas: Canvas, text: String, cx: Float, cy: Float) {
+            textPaint.getTextBounds(text, 0, text.length, textBounds)
+            canvas.drawText(text, cx, cy - (textBounds.top + textBounds.bottom) / 2f, textPaint)
         }
     }
 
@@ -1074,6 +1490,18 @@ class MainActivity : Activity() {
         const val CLEARANCE = 5.31f
         const val PI = 3.1415927f
         const val RAD_TO_DEG = 57.29578f
+
+        // ---- 胶囊预览状态常量 ----
+        const val LEFT_WIFI = 0
+        const val LEFT_5G = 1
+        const val LEFT_4G = 2
+        const val LEFT_AIRPLANE = 3
+        const val LEFT_NONE = 4
+        const val SIM_SINGLE = 0
+        const val SIM_DUAL = 1
+        const val BT_OFF = 0
+        const val BT_ARC = 1
+        const val BT_TEXT = 2
 
         /** 「通知中心」分组的功能 key（列表顺序 = 卡内行顺序，铃铛是农历的父依赖须在前）。 */
         val notifCenterKeys = listOf(

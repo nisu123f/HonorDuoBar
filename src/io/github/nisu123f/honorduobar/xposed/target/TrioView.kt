@@ -854,12 +854,23 @@ internal class TrioView(
         textPaint.textSize = capTextSize
         textPaint.typeface = Typeface.create("sans-serif", Typeface.BOLD)
         textPaint.textAlign = Paint.Align.RIGHT
+        val text = level.toString()
+        // 三位数（仅 100）按比例压缩字宽到不超过两位数（"99"），避免向左延伸撞到左格内容。
+        // measureText 开销可忽略（每帧两次，电量值变化才影响分支）。
+        if (text.length > 2) {
+            val limit = textPaint.measureText("99")
+            val actual = textPaint.measureText(text)
+            textPaint.textScaleX = (limit / actual).coerceAtMost(1f)
+        } else {
+            textPaint.textScaleX = 1f
+        }
         drawTextAt(
             canvas,
-            level.toString(),
+            text,
             capRight - capStroke * 0.5f - capTextInset,
             capInteriorCy,
         )
+        textPaint.textScaleX = 1f
     }
 
     /** 按当前 textAlign 在 (x, cy) 处垂直居中绘制文本。 */
