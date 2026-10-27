@@ -78,6 +78,9 @@ object FeatureCatalog {
     /** 通知中心流量行显示天气（流量开启追加，关闭则整行只显示天气）。 */
     const val KEY_SYSTEMUI_SHADE_WEATHER = "systemui.shade_weather"
 
+    /** 实时网速仅下拉面板时显示并刷新；收起时隐藏且停止原生 3s 轮询；锁屏不做处理。 */
+    const val KEY_SYSTEMUI_NETSPEED_SHADE_ONLY = "systemui.netspeed_shade_only"
+
     /**
      * 天气显示模板（String）：支持 {定位} {天气} {天气图标} {当前温度} {最低温度} {最高温度}
      * {体感温度} {湿度} {紫外线} {风向} {风速} {空气质量} {AQI} {PM25} {PM10} {气压}
@@ -152,6 +155,12 @@ object FeatureCatalog {
             "下拉通知中心或控制中心时，顶部状态栏行切回原生 Wi-Fi/信号/电池图标（不再三合一）；面板收起后恢复三合一字形。改动需重启系统界面生效。",
             defaultEnabled = false,
             dependsOn = KEY_SYSTEMUI_TRIO,
+        ),
+        Feature(
+            KEY_SYSTEMUI_NETSPEED_SHADE_ONLY,
+            "网速仅下拉显示",
+            "系统「显示实时网速」开启时：状态栏收起及锁屏状态下隐藏网速并停止后台刷新（原生每 3 秒查询一次流量统计），下拉通知/控制中心时才显示并刷新。改动需重启系统界面生效。",
+            defaultEnabled = false,
         ),
         Feature(
             KEY_SYSTEMUI_CAPSULE_NO_SCALE,

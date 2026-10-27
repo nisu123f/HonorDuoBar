@@ -20,5 +20,6 @@ object SystemUiHook : TargetHook {
         ShadeWeatherFeature.install(module, param)
         NotifBellFeature.install(module, param)
         CcVolumeLongPressFeature.install(module, param)
+        NetSpeedShadeFeature.install(module, param)
     }
 }
