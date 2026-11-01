@@ -13,6 +13,8 @@ object FeatureCatalog {
     const val KEY_SYSTEMUI_TRIO = "systemui.trio"
     /** 三合一电量环按百分比变色（≤10% 红、11–20% 橙）。 */
     const val KEY_SYSTEMUI_TRIO_LEVEL_COLOR = "systemui.trio_level_color"
+    /** 三合一充电时环心显示电量数字（代替闪电）。 */
+    const val KEY_SYSTEMUI_TRIO_CHARGING_LEVEL = "systemui.trio_charging_level"
     /** 三合一防烧屏（周期性微移字形）。 */
     const val KEY_SYSTEMUI_TRIO_ANTI_BURNIN = "systemui.trio_anti_burnin"
     /** 灵动胶囊展开时保留蓝牙等状态图标（不让原生按胶囊边界把图标淡出）。 */
@@ -126,6 +128,13 @@ object FeatureCatalog {
             "三合一：按电量变色",
             "电量环与环心数字随百分比变色：≤10% 红、11–20% 橙、>20% 跟随反色（与原生电池图标行为一致）；充电时统一显示绿色。",
             defaultEnabled = true,
+            dependsOn = KEY_SYSTEMUI_TRIO,
+        ),
+        Feature(
+            KEY_SYSTEMUI_TRIO_CHARGING_LEVEL,
+            "三合一：充电时显示电量数字",
+            "开启后充电时环心不再显示闪电，改为显示电量数字（绿色），充满同样显示 100。关闭时保持闪电图标。",
+            defaultEnabled = false,
             dependsOn = KEY_SYSTEMUI_TRIO,
         ),
         Feature(

@@ -958,6 +958,7 @@ object TrioFeature {
             showPercent = true,
             showType = true,
             levelColor = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_LEVEL_COLOR),
+            chargingShowLevel = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_CHARGING_LEVEL),
             antiBurnIn = RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_TRIO_ANTI_BURNIN),
             btBatteryMode = RemoteConfig.int(FeatureCatalog.KEY_SYSTEMUI_TRIO_BT_BATTERY, 0).coerceIn(0, 2),
             style = FeatureCatalog.resolveTrioStyle(

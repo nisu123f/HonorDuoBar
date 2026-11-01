@@ -29,6 +29,7 @@ internal data class TrioConfig(
     val showPercent: Boolean,
     val showType: Boolean,
     val levelColor: Boolean,
+    val chargingShowLevel: Boolean,
     val antiBurnIn: Boolean,
     val btBatteryMode: Int,
     val style: Int,
@@ -71,13 +72,14 @@ internal class TrioView(
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
     }
     private val textBounds = Rect()
+    /** 充电闪电：原 17×34，围绕中心 (60.5, 65) 放大 1.3 倍后烘进坐标（约 22×44）。 */
     private val bolt = Path().apply {
-        moveTo(65f, 48f)
-        lineTo(52f, 66f)
-        lineTo(60f, 66f)
-        lineTo(56f, 82f)
-        lineTo(69f, 63f)
-        lineTo(61f, 63f)
+        moveTo(66.35f, 42.9f)
+        lineTo(49.45f, 66.3f)
+        lineTo(59.85f, 66.3f)
+        lineTo(54.65f, 87.1f)
+        lineTo(71.55f, 62.4f)
+        lineTo(61.15f, 62.4f)
         close()
     }
     /**
@@ -621,7 +623,13 @@ internal class TrioView(
     private fun drawCentre(canvas: Canvas, fg: Int) {
         if (charging) {
             signalPaint.color = COLOR_CHARGING
-            if (fullCharging) {
+            if (config.chargingShowLevel && level >= 0) {
+                // 开关开启：充电时用数字代替闪电（绿色，充满也显示 100）。
+                textPaint.color = COLOR_CHARGING
+                textPaint.textSize = 48f
+                textPaint.typeface = Typeface.create("sans-serif", Typeface.BOLD)
+                drawTextCentred(canvas, level.toString(), 60f, 68f)
+            } else if (fullCharging) {
                 // 充满：闪电换成「～」（对齐原生充满图标的波浪语义）。
                 textPaint.color = signalPaint.color
                 textPaint.textSize = 44f
