@@ -326,7 +326,7 @@ class MainActivity : Activity() {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
         })
         texts.addView(TextView(this).apply {
-            text = "三合一底部信号点在蓝牙耳机连接时的替换样式：关闭保持原信号点；圆弧沿信号点轨迹画一段弧线；数字直接显示百分比。同时隐藏原生蓝牙图标避免重复。需先开启「状态栏三合一」，改动后需重启系统界面并重连蓝牙耳机生效。"
+            text = "用蓝牙电量替换填充三合一下方信号点位置（支持数字和进度样式）"
             setTextColor(colorSub)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding(0, dp(3), dp(12), 0)
@@ -359,7 +359,7 @@ class MainActivity : Activity() {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
         })
         texts.addView(TextView(this).apply {
-            text = "用变量自由拼接，变量之间可加空格、「·」「/」等任意字符。可用：{定位} {天气} {天气图标} {当前温度} {最低温度} {最高温度} {体感温度} {湿度} {紫外线} {风向} {风速} {空气质量} {AQI} {PM25} {PM10} {气压} {日出} {日落} {明日天气} {明日最高} {明日最低}。体感仅在温差>2℃时输出；改动需重启系统界面生效。"
+            text = "用提供变量自由拼接，变量之间可加空格、「·」「/」等任意字符。"
             setTextColor(colorSub)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding(0, dp(3), dp(12), 0)
@@ -414,7 +414,7 @@ class MainActivity : Activity() {
             "默认" to FeatureCatalog.defaultWeatherTemplate(),
             "简洁" to "{天气图标}{天气} {当前温度}",
             "详细" to "{天气图标}{天气}{当前温度}({体感温度}) {最低温度}/{最高温度} {空气质量}",
-            "带定位" to "📍{定位} {天气图标}{天气} {当前温度}",
+            "带定位" to "{天气图标}{天气} {当前温度} 📍{定位}",
             "极简" to "{天气图标}{当前温度}",
         )
 
@@ -571,7 +571,7 @@ class MainActivity : Activity() {
     }
 
     private fun btStyleLabel(mode: Int): String = when (mode) {
-        1 -> "圆弧"
+        1 -> "进度（直线）"
         2 -> "数字"
         else -> "关闭"
     }
@@ -584,7 +584,7 @@ class MainActivity : Activity() {
             toast("请先开启「状态栏三合一」")
             return
         }
-        val labels = arrayOf("关闭", "圆弧", "数字")
+        val labels = arrayOf("关闭", "进度（直线）", "数字")
         val current = FeatureStore.btBatteryMode().coerceIn(0, labels.size - 1)
         AlertDialog.Builder(this)
             .setTitle("蓝牙耳机电量")

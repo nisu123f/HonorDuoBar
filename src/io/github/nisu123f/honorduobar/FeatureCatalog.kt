@@ -145,27 +145,27 @@ object FeatureCatalog {
         Feature(
             KEY_SYSTEMUI_TRIO_LEGACY_TINT,
             "三合一：MagicOS 10 反色兼容",
-            "仅 MagicOS 10 显示。开启后图标反色走原 onDarkChanged 回调方案（v1.0.8 逻辑），关闭时走 HonorDuo refreshTint 方案。若关闭后图标反色异常（如白底看不清），请开启本开关。改动需重启系统界面生效。",
+            "仅 MagicOS 10 显示。开启后图标反色走原 onDarkChanged 回调方案（v1.0.8 逻辑），关闭时走 HonorDuo refreshTint 方案。若关闭后图标反色异常（如白底看不清），请开启本开关。",
             defaultEnabled = true,
             dependsOn = KEY_SYSTEMUI_TRIO,
         ),
         Feature(
             KEY_SYSTEMUI_PANEL_NATIVE_ICONS,
             "下拉面板：显示原生图标",
-            "下拉通知中心或控制中心时，顶部状态栏行切回原生 Wi-Fi/信号/电池图标（不再三合一）；面板收起后恢复三合一字形。改动需重启系统界面生效。",
+            "下拉通知中心或控制中心时，顶部状态栏行切回原生 Wi-Fi/信号/电池图标（不再三合一）；面板收起后恢复三合一字形。",
             defaultEnabled = false,
             dependsOn = KEY_SYSTEMUI_TRIO,
         ),
         Feature(
             KEY_SYSTEMUI_NETSPEED_SHADE_ONLY,
             "网速仅下拉显示",
-            "系统「显示实时网速」开启时：状态栏收起及锁屏状态下隐藏网速并停止后台刷新（原生每 3 秒查询一次流量统计），下拉通知/控制中心时才显示并刷新。改动需重启系统界面生效。",
+            "系统「显示实时网速」开启时：状态栏收起及锁屏状态下隐藏网速并停止后台刷新（原生每 3 秒查询一次流量统计），下拉通知/控制中心时才显示并刷新。",
             defaultEnabled = false,
         ),
         Feature(
             KEY_SYSTEMUI_CAPSULE_NO_SCALE,
             "灵动胶囊：状态栏不缩放",
-            "消息上岛常驻时，原生会把状态栏图标微缩（约 88%）给胶囊腾位置。开启后等上岛缩小动画播完，立即触发系统原生回弹动画恢复原始大小；点击展开/关闭胶囊的动画保持原生不变。改动需重启系统界面生效。",
+            "消息上岛常驻时，原生会把状态栏图标微缩（约 88%）给胶囊腾位置。开启后等上岛缩小动画播完，立即触发系统原生回弹动画恢复原始大小；点击展开/关闭胶囊的动画保持原生不变。",
             defaultEnabled = false,
         ),
         Feature(
@@ -184,7 +184,7 @@ object FeatureCatalog {
         Feature(
             KEY_SYSTEMUI_SHADE_WEATHER,
             "通知中心天气",
-            "在通知中心大时间下方的流量信息行显示天气：系统流量显示开启时追加在「总量 xxGB」之后；流量显示关闭时该行改为仅显示天气。数据源与系统锁屏天气插件同款（不发起网络请求，息屏不查询），天气 App 数据变化时即时刷新，另有 30 分钟兜底缓存。显示模板与点击行为可在下方分别配置。改动需重启系统界面生效。",
+            "在通知中心大时间下方的流量信息行显示天气：系统流量显示开启时追加在「总量 xxGB」之后；流量显示关闭时该行改为仅显示天气。数据源与系统锁屏天气插件同款（不发起网络请求，息屏不查询），天气 App 数据变化时即时刷新，另有 30 分钟兜底缓存。显示模板与点击行为可在下方分别配置。",
             defaultEnabled = false,
         ),
         Feature(
@@ -196,7 +196,7 @@ object FeatureCatalog {
         Feature(
             KEY_SYSTEMUI_CC_VOLUME_LONGPRESS,
             "音量条长按切换播放设备",
-            "长按控制中心音量条弹出系统媒体输出面板（含当前播放器卡片与输出设备列表，可切换本机/蓝牙等播放设备）；短按与滑动调节音量不受影响。改动需重启系统界面生效。",
+            "长按控制中心音量条弹出系统媒体输出面板（含当前播放器卡片与输出设备列表，可切换本机/蓝牙等播放设备）；短按与滑动调节音量不受影响。",
             defaultEnabled = false,
         ),
         Feature(
