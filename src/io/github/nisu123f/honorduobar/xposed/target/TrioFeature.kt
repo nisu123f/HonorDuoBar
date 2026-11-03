@@ -514,8 +514,11 @@ object TrioFeature {
                     runCatching { captureTracked(args.getOrNull(1)) }
                     val scale = args[0] as? Float
                     if (shouldClampScale(scale)) {
+                        // chain.args 是只读 List（不是数组），System.arraycopy 会抛
+                        // "source of type ...UnmodifiableRandomAccessList is not an array"，
+                        // 导致「胶囊不缩放」整条拦截失效并每次触摸刷一条异常日志。逐项拷贝即可。
                         val clamped = arrayOfNulls<Any?>(args.size)
-                        System.arraycopy(args, 0, clamped, 0, args.size)
+                        for (i in 0 until args.size) clamped[i] = args[i]
                         clamped[0] = 1.0f
                         chain.proceed(clamped)
                     } else {
@@ -554,6 +557,12 @@ object TrioFeature {
                 chain.proceed()
                 (chain.thisObject as? ViewGroup)?.let { host ->
                     runCatching { assertHidden(host) }
+                    // 布局完成后尺寸有效，再确认一次父链裁剪已放开（字号大于行高时靠它）。
+                    runCatching {
+                        (host.findViewWithTag<View>(TAG_VIEW) as? TrioView)?.let { trio ->
+                            unclipForTrio(trio, trio.glyphWidthPx, trio.glyphHeightPx)
+                        }
+                    }
                 }
             }
             ID_UPDATE_ALPHA -> {
@@ -922,6 +931,35 @@ object TrioFeature {
         return RemoteConfig.isEnabled(FeatureCatalog.KEY_SYSTEMUI_CAPSULE_NO_SCALE)
     }
 
+    /**
+     * 放开父链裁剪，让高过宿主行的字形完整画出来。
+     *
+     * 状态栏图标行（system_icons）只有约 20dp 高，而字号可以调到 26dp：
+     * - 用固定 dp 的 LayoutParams，View 会溢出并被 clipChildren 切掉（原来的「显示不完整」）；
+     * - 按行高收缩 View，又会出现「调大反而更小」。
+     *
+     * 所以这里沿父链关掉 clipChildren / clipToPadding，让 View 合法地画到行外。
+     * 状态栏窗口本身约 38dp 高（135px@560dpi），18–26dp 的字形都装得下。
+     * 找到第一个能完整容纳 View 的祖先就停，尽量少影响其它层级。
+     */
+    private fun unclipForTrio(trio: View, neededW: Int, neededH: Int) {
+        var p: View? = trio.parent as? View
+        var depth = 0
+        while (p != null && depth++ < 8) {
+            if (p is ViewGroup) {
+                if (p.clipChildren) p.clipChildren = false
+                if (p.clipToPadding) p.clipToPadding = false
+                // 这一层已经装得下（尺寸也量好了）就不用再往上放开了
+                if (p.width > 0 && p.height > 0 &&
+                    p.width >= neededW && p.height >= neededH
+                ) {
+                    return
+                }
+            }
+            p = p.parent as? View
+        }
+    }
+
     /** 在 system_icons 行尾插入字形，并把原生 Wi-Fi/信号组与电池隐藏。 */
     private fun inject(host: ViewGroup, module: XposedModule) {
         if (host.findViewWithTag<View>(TAG_VIEW) != null) return
@@ -1001,7 +1039,20 @@ object TrioFeature {
                 FeatureCatalog.defaultTrioSize(),
             ),
         )
-        val view = TrioView(ctx, config, { cachedBtBattery })
+        // 固定 dp 尺寸，不跟父容器高度拉伸：横屏/锁屏的状态栏行高更大时字形也不会放大。
+        // 胶囊按「独立高度 × 宽高比」放宽；圆环保持正方形、用三合一尺寸。
+        val side = dp(ctx, if (config.style == TrioView.STYLE_CAPSULE) config.capsuleHeight else sizeDp)
+        val widthPx = if (config.style == TrioView.STYLE_CAPSULE) {
+            (side * FeatureCatalog.capsuleAspect(config.capsuleLength, config.capsuleStrokePct))
+                .toInt().coerceAtLeast(side)
+        } else {
+            side
+        }
+        // 字形按「设置尺寸」绘制，不受宿主行高影响：View 高度只跟随行高用于定位，
+        // 字号大于行高时由 unclipForTrio 放开父链裁剪，画到行外。
+        val viewW = widthPx
+        val viewH = side
+        val view = TrioView(ctx, config, viewW, viewH) { cachedBtBattery }
         view.tintProvider = if (useLegacyTint) {
             // 原方案（MagicOS 10 兼容）：onDarkChanged 第三参 → SignalClusterView.mIconTint 兜底。
             {
@@ -1016,23 +1067,24 @@ object TrioFeature {
             }
         }
         view.tag = TAG_VIEW
-        // 固定 dp 尺寸，不跟父容器高度拉伸：横屏/锁屏的状态栏行高更大时字形也不会放大。
-        // 胶囊按「独立高度 × 宽高比」放宽；圆环保持正方形、用三合一尺寸。
-        val side = dp(ctx, if (config.style == TrioView.STYLE_CAPSULE) config.capsuleHeight else sizeDp)
-        val widthPx = if (config.style == TrioView.STYLE_CAPSULE) {
-            (side * FeatureCatalog.capsuleAspect(config.capsuleLength, config.capsuleStrokePct))
-                .toInt().coerceAtLeast(side)
-        } else {
-            side
-        }
+        // WRAP_CONTENT：宽度按设置尺寸占位（左右邻居才会让出位置），高度跟随宿主行高
+        // （不把状态栏行顶高）；字号大于行高时字形按设置尺寸画到行外，靠 unclipForTrio 放开裁剪。
         val lp: ViewGroup.LayoutParams = if (systemIcons is LinearLayout) {
-            LinearLayout.LayoutParams(widthPx, side).apply {
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply {
                 gravity = Gravity.CENTER_VERTICAL
             }
         } else {
-            ViewGroup.LayoutParams(widthPx, side)
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
         }
         systemIcons.addView(view, lp)
+        // 字号 > 宿主行高时字形会画到行外，必须沿父链放开裁剪才不会被切边。
+        unclipForTrio(view, viewW, viewH)
 
         // 宿主在电量/信号更新时可能把子视图重新设为 VISIBLE（且不一定触发 onLayout），
         // 这里挂 pre-draw 每帧重申；GONE→GONE 是空操作，开销可忽略。

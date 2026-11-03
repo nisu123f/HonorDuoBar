@@ -44,12 +44,22 @@ internal data class TrioConfig(
 internal class TrioView(
     context: Context,
     private val config: TrioConfig,
+    /** 字形宽度（px，= 设置尺寸）；View 按它占位，横向不与宿主行妥协。 */
+    private val desiredWidthPx: Int,
+    /** 字形高度（px，= 设置尺寸）；View 高度会跟随宿主行高，但字形始终按这个尺寸绘制。 */
+    private val desiredHeightPx: Int,
     /** 蓝牙电量提供者：返回 0–100 或 -1（无耳机/开关关闭）。由 TrioFeature 注入蓝牙 hook 缓存。 */
     private val btBatteryProvider: () -> Int,
 ) : View(context) {
 
     /** 反色采样回调：注入后由 TrioFeature 赋值，返回 ARGB 或 0（取不到）。 */
     var tintProvider: (() -> Int)? = null
+
+    /** 字形实际绘制宽度（px）：可能大于 View 宽度，宿主据此判断要放开到哪一层裁剪。 */
+    val glyphWidthPx: Int get() = desiredWidthPx
+
+    /** 字形实际绘制高度（px）：可能大于 View 高度（宿主行高）。 */
+    val glyphHeightPx: Int get() = desiredHeightPx
 
     /** 双卡档位诊断去重（变化时才输出日志，受全局诊断开关门控）。 */
     private var lastSlotDiagMsg: String? = null
@@ -271,9 +281,12 @@ internal class TrioView(
         }
     }
 
-    /** 防烧屏：30s 沿 3×3 网格步进一格（±1dp）。translation 只触发重绘、不触发排版。 */
+    /** 防烧屏：30s 沿 3×3 网格步进一格（±1dp）。只改绘制原点，不改 View 的 translation。 */
     private val burnInStepPx = resources.displayMetrics.density
     private var burnInIndex = 0
+    /** 当前位移（px）：字形整体平移 ±1dp，父链裁剪已放开，不会切边。 */
+    private var burnInDx = 0f
+    private var burnInDy = 0f
     private val burnInTask = object : Runnable {
         override fun run() {
             val cell = BURN_IN_CELLS[burnInIndex % BURN_IN_CELLS.size]
@@ -284,35 +297,41 @@ internal class TrioView(
     }
 
     /**
-     * 按父容器可用空间钳制位移。
+     * 防烧屏位移：只移动绘制原点（canvas.translate），不动 View 的 translation。
      *
-     * 父容器默认裁剪子视图，而字形排在状态栏最右侧、上下也几乎顶满行高；直接 ±1dp
-     * 会让绘制区域越界被切掉（显示不全）。这里把位移限制在父容器内边界以内，
-     * 贴着边缘时该方向不再移动，其余方向仍保留微移。
+     * 直接改 View.translationX/Y 会把整个 View 推出父容器的裁剪区（clipChildren +
+     * clipToPadding 默认开启），贴边时切掉一块；现在字形在画布内 ±1dp 平移，
+     * 父链裁剪已由 TrioFeature.unclipForTrio 放开，不会再切边。
      */
     private fun applyBurnInCell(cellX: Int, cellY: Int) {
-        var dx = cellX * burnInStepPx
-        var dy = cellY * burnInStepPx
-        val p = parent as? View
-        if (p != null && width > 0 && height > 0) {
-            dx = clampToParent(dx, left, right, p.width, p.paddingLeft, p.paddingRight)
-            dy = clampToParent(dy, top, bottom, p.height, p.paddingTop, p.paddingBottom)
-        }
-        translationX = dx
-        translationY = dy
+        burnInDx = (cellX * burnInStepPx).coerceIn(-burnInStepPx, burnInStepPx)
+        burnInDy = (cellY * burnInStepPx).coerceIn(-burnInStepPx, burnInStepPx)
+        invalidate()
     }
 
-    private fun clampToParent(
-        delta: Float,
-        start: Int,
-        end: Int,
-        parentSize: Int,
-        paddingStart: Int,
-        paddingEnd: Int,
-    ): Float {
-        val min = (paddingStart - start).toFloat()
-        val max = (parentSize - paddingEnd - end).toFloat()
-        return if (min > max) 0f else delta.coerceIn(min, max)
+    /** 宿主行高小于设置尺寸时的诊断去重（只在变化时输出一条，受全局诊断开关门控）。 */
+    private var lastShrinkDiag: String? = null
+
+    /**
+     * 量尺寸：宽度按设置值占位，高度跟随宿主行高（不把宿主行撑高）。
+     *
+     * 字形本身始终按设置尺寸绘制（见 onDraw），高度被行高压小也不会缩；
+     * 超出行的部分靠 TrioFeature.unclipForTrio() 放开父链裁剪来显示。
+     * 这样「设置 24dp」就一定是 24dp，同时不会因为 View 比行高把状态栏排版顶乱。
+     */
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val availH = View.MeasureSpec.getSize(heightMeasureSpec)
+        if (availH > 0 && availH < desiredHeightPx) {
+            val msg = "宿主行高 ${availH}px < 设置尺寸 ${desiredHeightPx}px，按设置尺寸绘制并放开父链裁剪"
+            if (msg != lastShrinkDiag) {
+                lastShrinkDiag = msg
+                XLog.diag(Log.INFO, MountEngine.TAG, "$LOG_PREFIX $msg")
+            }
+        }
+        setMeasuredDimension(
+            desiredWidthPx,
+            View.resolveSize(desiredHeightPx, heightMeasureSpec),
+        )
     }
 
     private var level = -1
@@ -334,10 +353,15 @@ internal class TrioView(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        // 位移走 canvas.translate，View 本身必须保持原位（历史版本用过 translation，这里显式归零）。
+        translationX = 0f
+        translationY = 0f
         refresh()
         handler.removeCallbacks(refreshTask)
         handler.postDelayed(refreshTask, 2000L)
         if (config.antiBurnIn) {
+            burnInDx = 0f
+            burnInDy = 0f
             handler.removeCallbacks(burnInTask)
             handler.postDelayed(burnInTask, BURN_IN_INTERVAL_MS)
         }
@@ -467,14 +491,22 @@ internal class TrioView(
     override fun onDraw(canvas: Canvas) {
         runCatching {
             super.onDraw(canvas)
+            // 字形尺寸只看「设置值」，不看 View 实际大小：
+            // View 的高度会被宿主行高压到 ~20dp，而设置值可以到 26dp——按 View 画就会变小。
+            val glyphW = desiredWidthPx.toFloat()
+            val glyphH = desiredHeightPx.toFloat()
+            if (glyphW <= 0f || glyphH <= 0f) return@runCatching
             if (config.style == STYLE_CAPSULE) {
-                drawCapsule(canvas)
+                drawCapsule(canvas, glyphW, glyphH)
             } else {
-                val size = min(width, height).toFloat()
+                val size = min(glyphW, glyphH)
                 if (size > 0f) {
                     val scale = size / 120f
                     val save = canvas.save()
-                    canvas.translate((width - size) / 2f, (height - size) / 2f)
+                    canvas.translate(
+                        (width - size) / 2f + burnInDx,
+                        (height - size) / 2f + burnInDy,
+                    )
                     canvas.scale(scale, scale)
                     val fg = resolveForeground()
                     drawRing(canvas, fg)
@@ -665,14 +697,15 @@ internal class TrioView(
     // 电量从下开口左缘逆时针走一整圈；开口随状态开合，无开口的边电量线连续。
     // 胶囊内左格 Wi-Fi/制式（飞行模式为飞机），右格电量数字。
 
-    private fun drawCapsule(canvas: Canvas) {
+    private fun drawCapsule(canvas: Canvas, glyphW: Float, glyphH: Float) {
         val fg = resolveForeground()
-        val scale = height / capInkH
+        // 宽、高两个方向取 min 等比缩放：View 被宿主压矮时按设置尺寸画，不会变形也不会超宽。
+        val scale = min(glyphW / capInkW, glyphH / capInkH)
         if (scale <= 0f) return
         val save = canvas.save()
         canvas.translate(
-            (width - capInkW * scale) * 0.5f,
-            (height - capInkH * scale) * 0.5f,
+            (width - capInkW * scale) * 0.5f + burnInDx,
+            (height - capInkH * scale) * 0.5f + burnInDy,
         )
         canvas.scale(scale, scale)
         canvas.translate(-capInkLeft, -capInkTop)
