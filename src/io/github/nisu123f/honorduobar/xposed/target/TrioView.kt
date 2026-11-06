@@ -18,6 +18,7 @@ import android.util.Log
 import android.view.View
 import io.github.nisu123f.honorduobar.xposed.core.MountEngine
 import io.github.nisu123f.honorduobar.xposed.core.XLog
+import kotlin.math.max
 import kotlin.math.min
 
 /**
@@ -570,16 +571,23 @@ internal class TrioView(
             config.levelColor && level <= 20 -> COLOR_LOW
             else -> fg
         }
-        // 进度只在「可见弧段」上均分：两段弧合计 0.65×总扫角，顶部/底部缺口不占进度。
-        // 若按总扫角（含顶部缺口）映射，32.5%–67.5% 会整段落进缺口，电量看起来卡住不动。
+        // ROUND 端点会让视觉弧长 = sweep + CAP_COMPENSATION（两端各加半个线宽的半圆）。
+        // 先算「期望视觉弧长」= 轨道视觉长 × 电量比，再减补偿得到实际 sweep，保证视觉比例精确。
         if (twoArcs) {
-            val filled = VISIBLE_SWEEP * level / 100f
-            val leftFill = min(filled, ARC_LEFT_SWEEP)
-            if (leftFill > 0f) ringArc(canvas, RING_START, leftFill)
-            val rightFill = (filled - ARC_LEFT_SWEEP).coerceIn(0f, ARC_RIGHT_SWEEP)
-            if (rightFill > 0f) ringArc(canvas, ARC_RIGHT_START, rightFill)
+            val leftRatio = min(level / 50f, 1f)
+            val leftVisual = leftRatio * (ARC_LEFT_SWEEP + CAP_COMPENSATION)
+            val leftFill = (leftVisual - CAP_COMPENSATION).coerceAtLeast(0f)
+            // 电量很小时 sweep 被补偿成负数，但仍需画一点表示「有电量」，最小 1°。
+            if (leftVisual > 0f) ringArc(canvas, RING_START, max(leftFill, 1f))
+
+            val rightRatio = ((level - 50f) / 50f).coerceIn(0f, 1f)
+            val rightVisual = rightRatio * (ARC_RIGHT_SWEEP + CAP_COMPENSATION)
+            val rightFill = (rightVisual - CAP_COMPENSATION).coerceAtLeast(0f)
+            if (rightVisual > ARC_EPSILON) ringArc(canvas, ARC_RIGHT_START, max(rightFill, 1f))
         } else {
-            ringArc(canvas, RING_START, RING_SWEEP * level / 100f)
+            val visual = (RING_SWEEP + CAP_COMPENSATION) * level / 100f
+            val sweep = (visual - CAP_COMPENSATION).coerceAtLeast(0f)
+            if (visual > 0f) ringArc(canvas, RING_START, max(sweep, 1f))
         }
     }
 
@@ -953,16 +961,21 @@ internal class TrioView(
         /** 原项目 TrioGeometry：环心、半径、描边、轨道透明度与缺口角度。 */
         const val RING_START = 148.69f
         const val RING_SWEEP = 242.62f
-        /** 顶部缺口占 0.325–0.675（原项目口径），左右各一段可见弧。 */
-        const val ARC_LEFT_SWEEP = RING_SWEEP * 0.325f
+        /** 顶部缺口占 0.325–0.675（原项目口径），左右各一段可见弧。左右用同一常量避免浮点误差导致 50% 时右弧多出一段。 */
+        const val ARC_HALF_SWEEP = RING_SWEEP * 0.325f
+        const val ARC_LEFT_SWEEP = ARC_HALF_SWEEP
         const val ARC_RIGHT_START = RING_START + RING_SWEEP * 0.675f
-        const val ARC_RIGHT_SWEEP = RING_START + RING_SWEEP - ARC_RIGHT_START
+        const val ARC_RIGHT_SWEEP = ARC_HALF_SWEEP
         /** 可见弧总长（不含顶部与底部缺口），电量进度按它均分。 */
         const val VISIBLE_SWEEP = ARC_LEFT_SWEEP + ARC_RIGHT_SWEEP
+        /** 右弧起步阈值：低于此角度视为浮点误差，不绘制（ROUND 端点会把极小 sweep 画成圆点）。 */
+        const val ARC_EPSILON = 0.5f
         const val B_CX = 59.5f
         const val B_CY = 61.487152f
         const val B_R = 51.5f
         const val RING_STROKE = 14f
+        /** ROUND 端点让视觉弧长 = sweep + 本值（两端各加半个线宽的半圆，沿弧方向投影）。 */
+        const val CAP_COMPENSATION = RING_STROKE / B_R * 180f / 3.14159265f
         const val TRACK_ALPHA = 56
 
         /** 蓝牙电量弧线：与电池环同心，半径 48 贴合原 4 信号点轨迹，扫角跨 65°→115°。 */
