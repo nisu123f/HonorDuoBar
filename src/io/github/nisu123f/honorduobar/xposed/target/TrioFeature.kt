@@ -941,20 +941,38 @@ object TrioFeature {
      * 所以这里沿父链关掉 clipChildren / clipToPadding，让 View 合法地画到行外。
      * 状态栏窗口本身约 38dp 高（135px@560dpi），18–26dp 的字形都装得下。
      * 找到第一个能完整容纳 View 的祖先就停，尽量少影响其它层级。
+     *
+     * 判定时除墨迹本身还要预留 ±1dp 的防烧屏位移余量：胶囊比圆环宽，行容器常常
+     * 刚好「装得下」墨迹，提前停手后上一层仍按边界裁剪，位移到边界时圆帽被切平。
      */
     private fun unclipForTrio(trio: View, neededW: Int, neededH: Int) {
+        // 两侧各留 1dp：防烧屏网格位移最大 ±1dp，不留余量就会有一侧越界被裁。
+        val slack = (2f * trio.resources.displayMetrics.density).toInt().coerceAtLeast(2)
+        val needW = neededW + slack
+        val needH = neededH + slack
+        // 墨迹在窗口坐标下的范围（View 比墨迹小时墨迹居中溢出）。未排版时退化为按尺寸判断。
+        val laidOut = trio.width > 0 && trio.height > 0
+        val loc = IntArray(2)
+        if (laidOut) trio.getLocationInWindow(loc)
+        val inkL = loc[0] + (trio.width - neededW) / 2f
+        val inkT = loc[1] + (trio.height - neededH) / 2f
         var p: View? = trio.parent as? View
         var depth = 0
         while (p != null && depth++ < 8) {
             if (p is ViewGroup) {
                 if (p.clipChildren) p.clipChildren = false
                 if (p.clipToPadding) p.clipToPadding = false
-                // 这一层已经装得下（尺寸也量好了）就不用再往上放开了
-                if (p.width > 0 && p.height > 0 &&
-                    p.width >= neededW && p.height >= neededH
-                ) {
-                    return
+                val fits = if (laidOut) {
+                    p.width > 0 && p.height > 0 && run {
+                        p.getLocationInWindow(loc)
+                        inkL >= loc[0] && inkL + needW <= loc[0] + p.width &&
+                            inkT >= loc[1] && inkT + needH <= loc[1] + p.height
+                    }
+                } else {
+                    p.width > 0 && p.height > 0 && p.width >= needW && p.height >= needH
                 }
+                // 这一层已经连位移余量一起装得下，就不用再往上放开了
+                if (fits) return
             }
             p = p.parent as? View
         }
